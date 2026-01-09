@@ -1,0 +1,110 @@
+import { sequelize } from '../config/database.js';
+
+// Import all modeUser.hasMany(StrategySubscription, { foreignKey: 'userId', as: 'strategySubscriptions', onDelete: 'CASCADE' });
+StrategySubscription.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+
+User.hasMany(CopyTradingAccount, { foreignKey: 'userId', as: 'copyTradingAccounts', onDelete: 'CASCADE' });
+CopyTradingAccount.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+import User from './User.js';
+import Trade from './Trade.js';
+import Strategy from './Strategy.js';
+import ApiKey from './ApiKey.js';
+import Plan from './Plan.js';
+import UsageStat from './UsageStat.js';
+import Broker from './Broker.js';
+import Wallet from './Wallet.js';
+import WalletTransaction from './WalletTransaction.js';
+import Notification from './Notification.js';
+import ActivityLog from './ActivityLog.js';
+import Settings from './Settings.js';
+import SupportTicket from './SupportTicket.js';
+import SupportMessage from './SupportMessage.js';
+import PlansCatalog from './PlansCatalog.js';
+import StrategySubscription from './StrategySubscription.js';
+import CopyTradingAccount from './CopyTradingAccount.js';
+
+// ========== User Associations ==========
+User.hasMany(Trade, { foreignKey: 'userId', as: 'trades', onDelete: 'CASCADE' });
+Trade.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+
+User.hasMany(Strategy, { foreignKey: 'userId', as: 'strategies', onDelete: 'CASCADE' });
+Strategy.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+
+User.hasMany(ApiKey, { foreignKey: 'userId', as: 'apiKeys', onDelete: 'CASCADE' });
+ApiKey.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+
+User.hasMany(Plan, { foreignKey: 'userId', as: 'plans', onDelete: 'CASCADE' });
+Plan.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+
+User.hasMany(UsageStat, { foreignKey: 'userId', as: 'usageStats', onDelete: 'CASCADE' });
+UsageStat.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+
+User.hasOne(Wallet, { foreignKey: 'userId', as: 'wallet', onDelete: 'CASCADE' });
+Wallet.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+
+User.hasMany(Notification, { foreignKey: 'userId', as: 'notifications', onDelete: 'CASCADE' });
+Notification.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+
+User.hasMany(ActivityLog, { foreignKey: 'userId', as: 'activityLogs', onDelete: 'SET NULL' });
+ActivityLog.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+
+User.hasOne(Settings, { foreignKey: 'userId', as: 'userSettings', onDelete: 'CASCADE' });
+Settings.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+
+User.hasMany(SupportTicket, { foreignKey: 'userId', as: 'tickets', onDelete: 'CASCADE' });
+SupportTicket.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+
+User.hasMany(SupportTicket, { foreignKey: 'assignedTo', as: 'assignedTickets', onDelete: 'SET NULL' });
+SupportTicket.belongsTo(User, { foreignKey: 'assignedTo', as: 'assignee' });
+
+User.hasMany(SupportMessage, { foreignKey: 'authorId', as: 'messages', onDelete: 'CASCADE' });
+SupportMessage.belongsTo(User, { foreignKey: 'authorId', as: 'author' });
+
+// ========== Trade-Strategy Associations ==========
+// REMOVED: Trades table does not have strategyId foreign key in database
+// Strategy.hasMany(Trade, { foreignKey: 'strategyId', as: 'trades', onDelete: 'SET NULL' });
+// Trade.belongsTo(Strategy, { foreignKey: 'strategyId', as: 'strategy' });
+
+// ========== Plan Associations ==========
+// REMOVED: Plans table does not have planId foreign key to PlansCatalog in database
+// Plan.belongsTo(PlansCatalog, { foreignKey: 'planId', as: 'planDetails' });
+// PlansCatalog.hasMany(Plan, { foreignKey: 'planId', as: 'subscriptions' });
+
+// ========== Wallet Associations ==========
+Wallet.hasMany(WalletTransaction, { foreignKey: 'walletId', as: 'transactions', onDelete: 'CASCADE' });
+WalletTransaction.belongsTo(Wallet, { foreignKey: 'walletId', as: 'wallet' });
+
+User.hasMany(StrategySubscription, { foreignKey: 'userId', as: 'subscriptions', onDelete: 'CASCADE' });
+StrategySubscription.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+
+Strategy.hasMany(StrategySubscription, { foreignKey: 'strategyId', as: 'subscriptions', onDelete: 'CASCADE' });
+StrategySubscription.belongsTo(Strategy, { foreignKey: 'strategyId', as: 'strategy' });
+
+// Sync database (DISABLED by default - use migrations in production)
+// Uncomment only for initial development
+// if (process.env.NODE_ENV === 'development') {
+//   sequelize.sync({ alter: false })
+//     .then(() => console.log('Database synced'))
+//     .catch(err => console.error('Database sync error:', err));
+// }
+
+export {
+  sequelize,
+  User,
+  Trade,
+  Strategy,
+  ApiKey,
+  Plan,
+  UsageStat,
+  Broker,
+  Wallet,
+  WalletTransaction,
+  Notification,
+  ActivityLog,
+  Settings,
+  SupportTicket,
+  SupportMessage,
+  PlansCatalog,
+  StrategySubscription,
+  CopyTradingAccount
+};

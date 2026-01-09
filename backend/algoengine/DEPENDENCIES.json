@@ -1,0 +1,27 @@
+{
+  "comment": "Add these dependencies to backend/package.json for AlgoEngine MT5 integration",
+  "dependencies": {
+    "metaapi.cloud-sdk": "^41.0.0",
+    "dotenv": "^16.3.1"
+  },
+  "scripts": {
+    "example:mt5-quickstart": "node backend/algoengine/examples/mt5-quickstart.js",
+    "example:trading": "node backend/algoengine/examples/trading-examples.js"
+  },
+  "algoengine": {
+    "description": "Automated Trading Engine with MT5 Support",
+    "version": "1.0.0",
+    "status": "production",
+    "features": [
+      "Fastest MT5 trade placement mode",
+      "Automatic reconnection logic",
+      "Real-time market data feeds",
+      "Technical indicators (SMA, EMA, RSI, MACD, BB)",
+      "Risk management and position sizing",
+      "Batch trade execution",
+      "Trade monitoring and modification",
+      "Comprehensive error handling",
+      "Unified logging system"
+    ]
+  }
+}

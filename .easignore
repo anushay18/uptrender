@@ -1,0 +1,36 @@
+# Dependencies
+node_modules
+.git
+.expo
+.expo-shared
+
+# macOS system files
+.DS_Store
+**/.Trash
+**/.Trash-*
+.Spotlight-V100
+.TemporaryItems
+.fseventsd
+.DocumentRevisions-V100
+.Trashes
+
+# Logs
+*.log
+logs
+
+# Build artifacts
+dist
+build
+*.tsbuildinfo
+
+# Environment files
+.env*.local
+
+# Backend specific
+backend/node_modules
+backend/logs
+backend/uploads
+
+# Mobile builds
+ios
+android

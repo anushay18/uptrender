@@ -1,0 +1,9 @@
+[2026-01-06T09:36:13.372Z] [INFO] Initializing MT5 Broker...
+[2026-01-06T09:36:13.443Z] [INFO] Initializing MT5 MetaAPI connection...
+[2026-01-06T09:36:13.471Z] [INFO] MetaAPI SDK initialized successfully
+[2026-01-06T09:36:13.472Z] [INFO] Connecting to MT5 account: 2cc542f3-2856-4dbe-93b9-89621d270db2
+[2026-01-06T09:36:14.046Z] [INFO] Account found: Xm
+[2026-01-06T09:36:17.652Z] [INFO] ✓ Connected to MT5 account successfully
+[2026-01-06T09:36:17.653Z] [INFO] ✓ MT5 Broker initialized successfully
+[2026-01-06T09:36:18.323Z] [INFO] Account: XM Global Limited | Balance: 991319.81 | Leverage: 1000x
+[2026-01-06T09:36:25.407Z] [ERROR] Failed to get price for XAUUSD: Specified symbol price not found
