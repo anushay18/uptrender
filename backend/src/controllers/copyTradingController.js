@@ -1,6 +1,7 @@
-import crypto from 'crypto';
+import { CopyTradingAccount, Charge, Wallet, WalletTransaction, sequelize } from '../models/index.js';
 import { validationResult } from 'express-validator';
-import { Charge, CopyTradingAccount, Wallet, WalletTransaction, sequelize } from '../models/index.js';
+import crypto from 'crypto';
+import { Op } from 'sequelize';
 
 /**
  * Copy Trading Controller Functions
@@ -442,17 +443,9 @@ export const getStatistics = async (req, res) => {
       type: sequelize.QueryTypes.SELECT
     });
 
-    // results is an array, get the first row or default to 0s
-    const stats = results || { totalAccounts: 0, masterAccounts: 0, childAccounts: 0, activeAccounts: 0 };
-    
     res.json({
       success: true,
-      data: {
-        totalAccounts: parseInt(stats.totalAccounts) || 0,
-        masterAccounts: parseInt(stats.masterAccounts) || 0,
-        childAccounts: parseInt(stats.childAccounts) || 0,
-        activeAccounts: parseInt(stats.activeAccounts) || 0,
-      },
+      data: results[0],
     });
   } catch (error) {
     console.error('Error fetching statistics:', error);

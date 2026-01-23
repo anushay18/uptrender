@@ -70,3 +70,5 @@ export {
     CryptoPaymentData, PaymentVerification, RazorpayOrder, UPIPaymentData, paymentService
 } from './paymentService';
 
+// Strategy Broker
+export { StrategyBroker, strategyBrokerService } from './strategyBrokerService';

@@ -13,6 +13,53 @@ class MarketDataService {
     this.candleCache = new Map();
     this.subscriptions = new Map();
     this.lastUpdateTime = {};
+    // Cache successful symbol mappings per broker account (accountId:symbol -> resolvedSymbol)
+    this.resolvedSymbols = new Map();
+    // Track current account for cache invalidation
+    this.currentAccountId = null;
+    
+    // Symbol variants to try (in order of preference)
+    // Different brokers use different naming conventions
+    this.symbolVariants = {
+      'XAUUSD': ['XAUUSD', 'GOLD', 'XAUUSDm', 'XAUUSD.', 'XAUUSD.r', 'GOLDm', 'GOLD.', 'XAUUSD_o'],
+      'XAGUSD': ['XAGUSD', 'SILVER', 'XAGUSDm', 'XAGUSD.', 'XAGUSD.r', 'SILVERm', 'SILVER.', 'XAGUSD_o'],
+      'BTCUSD': ['BTCUSD', 'BTCUSDm', 'BTCUSD.', 'BITCOIN', 'BTC/USD', 'BTCUSD_o'],
+      'ETHUSD': ['ETHUSD', 'ETHUSDm', 'ETHUSD.', 'ETHEREUM', 'ETH/USD', 'ETHUSD_o'],
+    };
+    
+    // Legacy symbol mapping (for backward compatibility)
+    this.symbolMap = {
+      'XAUUSD': 'GOLD',      // Gold
+      'XAGUSD': 'SILVER',    // Silver
+      'XAUUSD.': 'GOLD',
+      'XAGUSD.': 'SILVER',
+    };
+  }
+
+  /**
+   * Normalize symbol name for MT5 broker
+   * @param {string} symbol - Original symbol
+   * @returns {string} Normalized symbol for MT5
+   */
+  normalizeSymbol(symbol) {
+    const upperSymbol = symbol.toUpperCase();
+    // Check if we have a cached resolved symbol
+    if (this.resolvedSymbols.has(upperSymbol)) {
+      return this.resolvedSymbols.get(upperSymbol);
+    }
+    // Use legacy mapping as fallback
+    return this.symbolMap[upperSymbol] || symbol;
+  }
+  
+  /**
+   * Get all possible variants for a symbol
+   * @param {string} symbol - Original symbol
+   * @returns {Array<string>} List of possible symbol variants
+   */
+  getSymbolVariants(symbol) {
+    const upperSymbol = symbol.toUpperCase();
+    // Return defined variants or just the symbol itself
+    return this.symbolVariants[upperSymbol] || [symbol, this.symbolMap[upperSymbol]].filter(Boolean);
   }
 
   /**
@@ -27,15 +74,16 @@ class MarketDataService {
         throw new Error('Not connected to MT5');
       }
 
+      const normalizedSymbol = this.normalizeSymbol(symbol);
       const subscriptionId = `price-${symbol}-${Date.now()}`;
       const connection = connectionManager.getConnection();
 
       // Subscribe to symbol price stream
       const subscription = connection.addSynchronizationListener({
         onSymbolPriceUpdated: (price) => {
-          if (price.symbol === symbol) {
+          if (price.symbol === normalizedSymbol) {
             const priceData = {
-              symbol: price.symbol,
+              symbol: symbol, // Return original symbol name
               bid: price.bid,
               ask: price.ask,
               last: price.last,
@@ -43,7 +91,7 @@ class MarketDataService {
               spread: price.ask - price.bid,
             };
 
-            // Cache price
+            // Cache price with original symbol
             this.priceCache.set(symbol, priceData);
             this.lastUpdateTime[symbol] = Date.now();
 
@@ -53,7 +101,7 @@ class MarketDataService {
             }
 
             if (MT5_CONFIG.logging.logPrices) {
-              logger.debug(`[PRICE] ${symbol} - Bid: ${price.bid}, Ask: ${price.ask}`);
+              logger.debug(`[PRICE] ${symbol} (${normalizedSymbol}) - Bid: ${price.bid}, Ask: ${price.ask}`);
             }
           }
         },
@@ -66,7 +114,7 @@ class MarketDataService {
         callback,
       });
 
-      logger.info(`[MARKET] Subscribed to ${symbol} prices - ID: ${subscriptionId}`);
+      logger.info(`[MARKET] Subscribed to ${symbol} (${normalizedSymbol}) prices - ID: ${subscriptionId}`);
 
       return subscriptionId;
     } catch (error) {
@@ -109,24 +157,58 @@ class MarketDataService {
       }
 
       const connection = connectionManager.getConnection();
-      const price = await connection.getSymbolPrice(symbol);
-
-      const priceData = {
-        symbol: price.symbol,
-        bid: price.bid,
-        ask: price.ask,
-        last: price.last,
-        time: new Date(price.time).toISOString(),
-        spread: price.ask - price.bid,
-      };
-
-      // Cache price
-      this.priceCache.set(symbol, priceData);
-      this.lastUpdateTime[symbol] = Date.now();
-
-      return priceData;
+      const upperSymbol = symbol.toUpperCase();
+      
+      // Get current account ID for per-account caching
+      const accountId = connectionManager.account?.id || 'default';
+      const cacheKey = `${accountId}:${upperSymbol}`;
+      
+      // Check if account changed - clear resolved symbols cache if so
+      if (this.currentAccountId && this.currentAccountId !== accountId) {
+        logger.debug(`[PRICE] Account changed from ${this.currentAccountId} to ${accountId}, clearing resolved symbols cache`);
+        this.resolvedSymbols.clear();
+      }
+      this.currentAccountId = accountId;
+      
+      // If we have a resolved symbol from previous successful fetch for this account, use it
+      if (this.resolvedSymbols.has(cacheKey)) {
+        const resolvedSymbol = this.resolvedSymbols.get(cacheKey);
+        try {
+          const price = await connection.getSymbolPrice(resolvedSymbol);
+          return this._buildPriceData(symbol, price);
+        } catch (cachedError) {
+          // Cached symbol no longer works, clear it and retry
+          logger.debug(`[PRICE] Cached symbol ${resolvedSymbol} failed, retrying with variants`);
+          this.resolvedSymbols.delete(cacheKey);
+        }
+      }
+      
+      // Try symbol variants until one works
+      const variants = this.getSymbolVariants(symbol);
+      let lastError = null;
+      
+      for (const variant of variants) {
+        try {
+          logger.debug(`[PRICE] Trying symbol variant: ${variant} for ${symbol}`);
+          const price = await connection.getSymbolPrice(variant);
+          
+          // Success! Cache the resolved symbol for future requests (per account)
+          this.resolvedSymbols.set(cacheKey, variant);
+          logger.info(`[PRICE] Symbol ${symbol} resolved to broker symbol: ${variant} (account: ${accountId})`);
+          
+          return this._buildPriceData(symbol, price);
+        } catch (variantError) {
+          lastError = variantError;
+          // Continue to next variant
+        }
+      }
+      
+      // All variants failed
+      throw lastError || new Error(`No valid symbol variant found for ${symbol}`);
     } catch (error) {
-      logger.error(`Failed to get price for ${symbol}: ${error.message}`);
+      const variants = this.getSymbolVariants(symbol);
+      logger.error(`Failed to get price for ${symbol} (tried variants: ${variants.join(', ')}): ${error.message}`);
+      
       // Return cached value if available
       const cached = this.priceCache.get(symbol);
       if (cached) {
@@ -135,6 +217,27 @@ class MarketDataService {
       }
       throw error;
     }
+  }
+  
+  /**
+   * Build price data object
+   * @private
+   */
+  _buildPriceData(symbol, price) {
+    const priceData = {
+      symbol: symbol, // Return original symbol name
+      bid: price.bid,
+      ask: price.ask,
+      last: price.last,
+      time: new Date(price.time).toISOString(),
+      spread: price.ask - price.bid,
+    };
+
+    // Cache price with original symbol
+    this.priceCache.set(symbol, priceData);
+    this.lastUpdateTime[symbol] = Date.now();
+
+    return priceData;
   }
 
   /**
@@ -150,9 +253,10 @@ class MarketDataService {
         throw new Error('Not connected to MT5');
       }
 
+      const normalizedSymbol = this.normalizeSymbol(symbol);
       const connection = connectionManager.getConnection();
       const candles = await connection.getCandles(
-        symbol,
+        normalizedSymbol,
         timeframe,
         { count }
       );

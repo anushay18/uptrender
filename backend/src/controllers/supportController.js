@@ -1,6 +1,7 @@
 import { SupportTicket, SupportMessage, User, Notification } from '../models/index.js';
 import { Op } from 'sequelize';
 import { emitTicketUpdate, emitToUser, emitNotification } from '../config/socket.js';
+import emailNotificationHelper from '../utils/emailNotificationHelper.js';
 
 // Get user's tickets
 export const getUserTickets = async (req, res) => {
@@ -116,6 +117,15 @@ export const createTicket = async (req, res) => {
       isRead: false
     });
     emitNotification(userId, notification);
+
+    // Send email notification for ticket creation
+    emailNotificationHelper.notifyTicketCreated(userId, {
+      id: ticket.id,
+      ticketNumber: ticketNumber,
+      subject: subject,
+      priority: priority,
+      status: 'Open'
+    }).catch(err => console.error('Failed to send ticket created email:', err));
 
     res.status(201).json({
       success: true,
@@ -364,7 +374,9 @@ export const updateTicketStatus = async (req, res) => {
     const { id } = req.params;
     const { status, priority } = req.body;
 
-    const ticket = await SupportTicket.findByPk(id);
+    const ticket = await SupportTicket.findByPk(id, {
+      include: [{ model: User, as: 'user', attributes: ['id', 'name', 'email'] }]
+    });
     if (!ticket) {
       return res.status(404).json({ error: 'Ticket not found' });
     }
@@ -374,6 +386,18 @@ export const updateTicketStatus = async (req, res) => {
     if (priority) updateData.priority = priority;
 
     await ticket.update(updateData);
+
+    // Send email notification about status update
+    if (status && ticket.userId) {
+      emailNotificationHelper.notifyTicketUpdate(ticket.userId, {
+        id: ticket.id,
+        ticketNumber: ticket.ticketNumber,
+        subject: ticket.subject,
+        status: status,
+        message: `Your ticket status has been updated to "${status}".`,
+        isAdminReply: false
+      }).catch(err => console.error('Failed to send ticket status update email:', err));
+    }
 
     res.json({
       success: true,
@@ -393,7 +417,9 @@ export const addAdminReply = async (req, res) => {
     const { id } = req.params;
     const { message, attachments } = req.body;
 
-    const ticket = await SupportTicket.findByPk(id);
+    const ticket = await SupportTicket.findByPk(id, {
+      include: [{ model: User, as: 'user', attributes: ['id', 'name', 'email'] }]
+    });
     if (!ticket) {
       return res.status(404).json({ error: 'Ticket not found' });
     }
@@ -421,6 +447,18 @@ export const addAdminReply = async (req, res) => {
         }
       ]
     });
+
+    // Send email notification to user about admin reply
+    if (ticket.userId) {
+      emailNotificationHelper.notifyTicketUpdate(ticket.userId, {
+        id: ticket.id,
+        ticketNumber: ticket.ticketNumber,
+        subject: ticket.subject,
+        status: 'In Progress',
+        message: message,
+        isAdminReply: true
+      }).catch(err => console.error('Failed to send ticket update email:', err));
+    }
 
     res.status(201).json({
       success: true,

@@ -4,11 +4,11 @@ import { Platform } from 'react-native';
 
 // Keys for storage
 export const STORAGE_KEYS = {
-  ACCESS_TOKEN: 'access_token',
-  REFRESH_TOKEN: 'refresh_token',
-  USER: 'user_data',
-  THEME: 'theme_preference',
-  ONBOARDING_COMPLETE: 'onboarding_complete',
+  ACCESS_TOKEN: 'accessToken',
+  REFRESH_TOKEN: 'refreshToken',
+  USER: 'user',
+  THEME: 'theme',
+  ONBOARDING_COMPLETE: 'onboardingComplete',
 };
 
 // Use SecureStore for sensitive data on native, AsyncStorage for web

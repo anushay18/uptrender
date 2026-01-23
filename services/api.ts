@@ -1,12 +1,5 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_CONFIG, ENDPOINTS, STORAGE_KEYS } from './config';
-
-// Secure storage wrapper (uses AsyncStorage for now, can be replaced with SecureStore)
-const secureStorage = {
-  getItem: async (key: string) => AsyncStorage.getItem(key),
-  setItem: async (key: string, value: string) => AsyncStorage.setItem(key, value),
-  removeItem: async (key: string) => AsyncStorage.removeItem(key),
-};
+import { secureStorage } from './storage';
 
 // Types
 export interface ApiResponse<T = any> {

@@ -23,6 +23,14 @@ const PaperPosition = sequelize.define('PaperPosition', {
       key: 'id'
     }
   },
+  apiKeyId: {
+    type: DataTypes.INTEGER.UNSIGNED,
+    allowNull: true,
+    references: {
+      model: 'apikeys',
+      key: 'id'
+    }
+  },
   orderId: {
     type: DataTypes.STRING(50),
     allowNull: false,

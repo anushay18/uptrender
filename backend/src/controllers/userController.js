@@ -31,6 +31,7 @@ const getProfile = async (req, res) => {
       emailVerified: user.emailVerified,
       phoneVerified: user.phoneVerified,
       password: '********', // Mask password
+      passwordChangedAt: user.passwordChangedAt || null,
       referralCode: user.referralCode || '',
       referralLink: user.referralLink || '',
       referredBy: user.referredBy || '',
@@ -66,7 +67,7 @@ const getProfile = async (req, res) => {
     });
   } catch (error) {
     console.error('Get profile error:', error);
-    res.status(500).json({ error: 'Failed to fetch profile' });
+    res.status(500).json({ error: 'Unable to load your profile. Please refresh the page' });
   }
 };
 
@@ -111,7 +112,7 @@ const updateProfile = async (req, res) => {
     });
   } catch (error) {
     console.error('Update profile error:', error);
-    res.status(500).json({ error: 'Failed to update profile' });
+    res.status(500).json({ error: 'Unable to update your profile. Please try again' });
   }
 };
 
@@ -166,7 +167,7 @@ const uploadAvatarController = async (req, res) => {
     
     res.status(500).json({
       success: false,
-      error: 'Failed to upload avatar'
+      error: 'Unable to upload avatar. Please try a smaller image'
     });
   }
 };
@@ -201,9 +202,12 @@ const changePassword = async (req, res) => {
     // Hash new password
     const hashedPassword = await bcrypt.hash(newPassword, 10);
 
-    // Update password
+    // Update password and passwordChangedAt timestamp
     await User.update(
-      { password: hashedPassword },
+      { 
+        password: hashedPassword,
+        passwordChangedAt: new Date()
+      },
       { where: { id: userId } }
     );
 
@@ -213,7 +217,7 @@ const changePassword = async (req, res) => {
     });
   } catch (error) {
     console.error('Change password error:', error);
-    res.status(500).json({ error: 'Failed to change password' });
+    res.status(500).json({ error: 'Unable to change password. Please try again' });
   }
 };
 
@@ -247,7 +251,7 @@ const getWebhookSecret = async (req, res) => {
     });
   } catch (error) {
     console.error('Get webhook secret error:', error);
-    res.status(500).json({ error: 'Failed to get webhook secret' });
+    res.status(500).json({ error: 'Unable to retrieve webhook secret. Please try again' });
   }
 };
 
@@ -270,7 +274,7 @@ const regenerateWebhookSecret = async (req, res) => {
     });
   } catch (error) {
     console.error('Regenerate webhook secret error:', error);
-    res.status(500).json({ error: 'Failed to regenerate webhook secret' });
+    res.status(500).json({ error: 'Unable to regenerate webhook secret. Please try again' });
   }
 };
 

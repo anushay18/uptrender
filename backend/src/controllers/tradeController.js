@@ -1,4 +1,4 @@
-import { Trade, User, Strategy, StrategySubscription, PaperPosition, sequelize } from '../models/index.js';
+import { Trade, User, Strategy, StrategySubscription, PaperPosition, Wallet, WalletTransaction, PerTradeCharge, Notification, sequelize } from '../models/index.js';
 import { Op } from 'sequelize';
 import { emitTradeUpdate, emitDashboardUpdate } from '../config/socket.js';
 
@@ -6,7 +6,9 @@ import { emitTradeUpdate, emitDashboardUpdate } from '../config/socket.js';
 export const getUserTrades = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { status, market, page = 1, limit = 10, search } = req.query;
+    const { status, market, page = 1, limit = 10, search, startDate, endDate } = req.query;
+
+    console.log(`[TradeController] getUserTrades called - userId: ${userId}, status: ${status}, market: ${market}, startDate: ${startDate}`);
 
     const where = { userId };
     const paperWhere = { userId };
@@ -15,14 +17,33 @@ export const getUserTrades = async (req, res) => {
     where.broker = { [Op.ne]: 'PAPER' };
     
     // Map status for paper positions: Pending/Open -> Open, Completed/Failed -> Closed
-    // Paper positions table uses 'Open' and 'Closed' status values
+    // Paper positions table uses 'Open', 'Closed', 'SL_Hit', 'TP_Hit' status values
     const mapStatusForPaper = (statusList) => {
-      return statusList.map(s => {
-        if (s === 'Open' || s === 'Pending') return 'Open';  // Paper positions use 'Open'
-        if (s === 'Completed' || s === 'Failed') return 'Closed';  // Paper positions use 'Closed'
-        return s;
-      }).filter((v, i, a) => a.indexOf(v) === i); // Remove duplicates
+      const mapped = [];
+      statusList.forEach(s => {
+        if (s === 'Open' || s === 'Pending') {
+          mapped.push('Open');  // Paper positions use 'Open'
+        } else if (s === 'Completed' || s === 'Failed') {
+          // For completed/failed trades, include all closed paper position statuses
+          mapped.push('Closed', 'SL_Hit', 'TP_Hit');
+        }
+      });
+      return [...new Set(mapped)]; // Remove duplicates
     };
+    
+    // Date filtering
+    if (startDate) {
+      const start = new Date(startDate);
+      start.setHours(0, 0, 0, 0);
+      where.createdAt = { ...where.createdAt, [Op.gte]: start };
+      paperWhere.createdAt = { ...paperWhere.createdAt, [Op.gte]: start };
+    }
+    if (endDate) {
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+      where.createdAt = { ...where.createdAt, [Op.lte]: end };
+      paperWhere.createdAt = { ...paperWhere.createdAt, [Op.lte]: end };
+    }
     
     // Support comma-separated statuses, e.g. status=Completed,Failed
     if (status) {
@@ -87,28 +108,39 @@ export const getUserTrades = async (req, res) => {
     }
 
     // Mark paper positions with isPaper flag and normalize fields
-    const paperTrades = paperPositions.map(p => ({
-      id: p.id,
-      orderId: p.orderId, // Include orderId for close/modify operations
-      userId: p.userId,
-      strategyId: p.strategyId,
-      strategy: p.strategy,
-      symbol: p.symbol,
-      market: p.market,
-      type: p.type,
-      tradeType: p.type,
-      amount: p.volume,
-      volume: p.volume,
-      price: p.openPrice,
-      currentPrice: p.closePrice || p.currentPrice, // Use closePrice for closed positions
-      status: p.status === 'Open' ? 'Pending' : p.status === 'Closed' ? 'Completed' : p.status,  // Map Open->Pending for UI consistency
-      pnl: p.realizedProfit || p.profit, // Use realizedProfit for closed, profit for open
-      stopLoss: p.stopLoss, // Include SL/TP for display
-      takeProfit: p.takeProfit,
-      createdAt: p.createdAt,
-      updatedAt: p.updatedAt,
-      isPaper: true
-    }));
+    const paperTrades = paperPositions.map(p => {
+      // Map paper position statuses to frontend-friendly statuses
+      let mappedStatus = p.status;
+      if (p.status === 'Closed' || p.status === 'SL_Hit' || p.status === 'TP_Hit') {
+        mappedStatus = 'Completed';  // Map all closed statuses to Completed for UI consistency
+      }
+      
+      return {
+        id: p.id,
+        orderId: p.orderId, // Include orderId for close/modify operations
+        userId: p.userId,
+        strategyId: p.strategyId,
+        strategy: p.strategy,
+        symbol: p.symbol,
+        market: p.market,
+        type: p.type,
+        tradeType: p.type,
+        amount: p.volume,
+        volume: p.volume,
+        quantity: p.volume,
+        filledQuantity: p.volume,
+        executedQty: p.volume,
+        price: p.openPrice,
+        currentPrice: p.closePrice || p.currentPrice, // Use closePrice for closed positions
+        status: mappedStatus,
+        pnl: p.realizedProfit || p.profit, // Use realizedProfit for closed, profit for open
+        stopLoss: p.stopLoss, // Include SL/TP for display
+        takeProfit: p.takeProfit,
+        createdAt: p.createdAt,
+        updatedAt: p.updatedAt,
+        isPaper: true
+      };
+    });
 
     // Mark live trades
     const liveTrades = trades.map(t => ({
@@ -150,7 +182,7 @@ export const getUserTrades = async (req, res) => {
     });
   } catch (error) {
     console.error('Get trades error:', error);
-    res.status(500).json({ error: 'Failed to fetch trades' });
+    res.status(500).json({ error: 'Unable to load trades. Please refresh the page' });
   }
 };
 
@@ -190,7 +222,7 @@ export const createTrade = async (req, res) => {
     });
   } catch (error) {
     console.error('Create trade error:', error);
-    res.status(500).json({ error: 'Failed to create trade' });
+    res.status(500).json({ error: 'Unable to create trade. Please try again' });
   }
 };
 
@@ -214,7 +246,7 @@ export const getTradeById = async (req, res) => {
     });
   } catch (error) {
     console.error('Get trade error:', error);
-    res.status(500).json({ error: 'Failed to fetch trade' });
+    res.status(500).json({ error: 'Unable to load trade details. Please try again' });
   }
 };
 
@@ -238,7 +270,84 @@ export const updateTrade = async (req, res) => {
     delete updateData.id;
     delete updateData.createdAt;
 
+    // Check if status is changing to Completed
+    const wasCompleted = trade.status === 'Completed';
+    const isNowCompleted = updateData.status === 'Completed';
+    const statusChangedToCompleted = !wasCompleted && isNowCompleted;
+
     await trade.update(updateData);
+
+    // If status changed to Completed, process per-trade charge for live trades
+    if (statusChangedToCompleted && trade.strategyId && trade.broker !== 'PAPER') {
+      try {
+        // Get strategy info
+        const strategy = await Strategy.findByPk(trade.strategyId);
+        if (strategy) {
+          // Check if user is a subscriber (not owner)
+          const isOwner = strategy.userId === userId;
+          
+          if (!isOwner) {
+            // Check if strategy has per-trade charge enabled
+            const perTradeCharge = await PerTradeCharge.findOne({
+              where: { isActive: true },
+              order: [['id', 'ASC']]
+            });
+
+            if (perTradeCharge && perTradeCharge.strategyIds) {
+              const strategyIds = Array.isArray(perTradeCharge.strategyIds) 
+                ? perTradeCharge.strategyIds 
+                : JSON.parse(perTradeCharge.strategyIds || '[]');
+
+              if (strategyIds.includes(Number(trade.strategyId))) {
+                const chargeAmount = parseFloat(perTradeCharge.amount);
+                
+                // Get user wallet
+                const wallet = await Wallet.findOne({
+                  where: { userId, status: 'Active' }
+                });
+
+                if (wallet && parseFloat(wallet.balance) >= chargeAmount) {
+                  const newBalance = parseFloat(wallet.balance) - chargeAmount;
+                  
+                  // Deduct from wallet
+                  await wallet.update({ balance: newBalance });
+                  
+                  // Create transaction record
+                  await WalletTransaction.create({
+                    walletId: wallet.id,
+                    type: 'debit',
+                    amount: chargeAmount,
+                    description: `Per-trade charge for strategy: ${strategy.name}`,
+                    reference: `PTC-${trade.id}-${trade.strategyId}`,
+                    balanceAfter: newBalance
+                  });
+
+                  // Send notification
+                  await Notification.create({
+                    userId,
+                    type: 'transaction',
+                    title: 'Per-Trade Charge Deducted',
+                    message: `₹${chargeAmount} has been deducted from your wallet for completed trade in strategy: ${strategy.name}`,
+                    data: {
+                      tradeId: trade.id,
+                      strategyId: trade.strategyId,
+                      amount: chargeAmount,
+                      type: 'per_trade_charge'
+                    },
+                    isRead: false
+                  });
+
+                  console.log(`💰 Per-trade charge of ₹${chargeAmount} deducted for trade ${trade.id}`);
+                }
+              }
+            }
+          }
+        }
+      } catch (chargeError) {
+        console.error('Error processing per-trade charge on update:', chargeError);
+        // Don't fail the trade update if charge processing fails
+      }
+    }
 
     // Emit real-time update
     emitTradeUpdate(userId, trade, 'update');
@@ -251,7 +360,7 @@ export const updateTrade = async (req, res) => {
     });
   } catch (error) {
     console.error('Update trade error:', error);
-    res.status(500).json({ error: 'Failed to update trade' });
+    res.status(500).json({ error: 'Unable to update trade. Please try again' });
   }
 };
 
@@ -281,7 +390,7 @@ export const deleteTrade = async (req, res) => {
     });
   } catch (error) {
     console.error('Delete trade error:', error);
-    res.status(500).json({ error: 'Failed to delete trade' });
+    res.status(500).json({ error: 'Unable to delete trade. Please try again' });
   }
 };
 
@@ -329,7 +438,7 @@ export const getTradeStats = async (req, res) => {
     });
   } catch (error) {
     console.error('Get trade stats error:', error);
-    res.status(500).json({ error: 'Failed to fetch statistics' });
+    res.status(500).json({ error: 'Unable to load trade statistics. Please try again' });
   }
 };
 
@@ -387,7 +496,7 @@ export const getAllTrades = async (req, res) => {
     });
   } catch (error) {
     console.error('Get all trades error:', error);
-    res.status(500).json({ error: 'Failed to fetch trades' });
+    res.status(500).json({ error: 'Unable to load trades. Please refresh the page' });
   }
 };
 
@@ -495,7 +604,7 @@ export const adminStrategyTrade = async (req, res) => {
   } catch (error) {
     await transaction.rollback();
     console.error('Admin strategy trade error:', error);
-    res.status(500).json({ error: 'Failed to execute strategy trade' });
+    res.status(500).json({ error: 'Unable to execute strategy trade. Please try again' });
   }
 };
 
@@ -565,7 +674,7 @@ export const adminWebhookTrigger = async (req, res) => {
       const subscriptions = await StrategySubscription.findAll({
         where: { strategyId, isActive: true, isPaused: false }
       });
-      const usersCount = subscriptions.length + 1; // +1 for owner
+      const usersCount = subscriptions.length;
 
       if (webhookResult.statusCode >= 200 && webhookResult.statusCode < 300) {
         return res.json({
@@ -586,9 +695,9 @@ export const adminWebhookTrigger = async (req, res) => {
       }
     }
 
-    res.status(500).json({ error: 'No response from webhook handler' });
+    res.status(500).json({ error: 'Webhook signal not processed. Please try again' });
   } catch (error) {
     console.error('Admin webhook trigger error:', error);
-    res.status(500).json({ error: 'Failed to trigger webhook signal' });
+    res.status(500).json({ error: 'Unable to trigger webhook signal. Please try again' });
   }
 };

@@ -3,6 +3,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
 import { useNotifications, usePaperPositionUpdates, useWalletUpdates } from '@/hooks/useWebSocket';
 import { notificationService, PaperPosition, paperPositionService, strategyService, tradeService, walletService } from '@/services';
+import { WS_EVENTS, wsService } from '@/services/websocket';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import {
@@ -76,6 +77,18 @@ export default function HomeScreen() {
   const { user, isAuthenticated } = useAuth();
   const router = useRouter();
   const theme = getTheme(isDark);
+  const [isConnected, setIsConnected] = useState<boolean>(wsService.isConnected());
+
+  useEffect(() => {
+    const handleConnected = () => setIsConnected(true);
+    const handleDisconnected = () => setIsConnected(false);
+    wsService.on(WS_EVENTS.CONNECTED, handleConnected);
+    wsService.on(WS_EVENTS.DISCONNECTED, handleDisconnected);
+    return () => {
+      wsService.off(WS_EVENTS.CONNECTED, handleConnected);
+      wsService.off(WS_EVENTS.DISCONNECTED, handleDisconnected);
+    };
+  }, []);
   
   // UI State
   const [selectedSegment, setSelectedSegment] = useState('All Segments');
@@ -85,6 +98,7 @@ export default function HomeScreen() {
   const [activeTab, setActiveTab] = useState<'open' | 'closed'>('open');
   const [showSLTPModal, setShowSLTPModal] = useState(false);
   const [selectedPosition, setSelectedPosition] = useState<any>(null);
+  const sltpIdRef = useRef<number | string | null>(null);
   const [stopLoss, setStopLoss] = useState('');
   const [takeProfit, setTakeProfit] = useState('');
   const [slType, setSlType] = useState<'points' | 'percentage' | 'price'>('points');
@@ -113,16 +127,46 @@ export default function HomeScreen() {
   
   // Real-time updates via WebSocket
   const realTimePositions = usePaperPositionUpdates((update) => {
+    console.log('🔄 [Dashboard] Real-time position update received:', {
+      type: update.type,
+      positionId: update.position?.id,
+      currentPrice: update.position?.currentPrice,
+      profit: update.position?.profit,
+      profitPercent: update.position?.profitPercent,
+      timestamp: new Date().toISOString()
+    });
+    
     // Handle position updates in real-time
     if (update.type === 'opened') {
+      console.log('✅ [Dashboard] New position opened, adding to list');
       setOpenPositions(prev => [update.position, ...prev]);
-      } else if (update.type === 'closed' || update.type === 'sl_hit' || update.type === 'tp_hit') {
+    } else if (update.type === 'closed' || update.type === 'sl_hit' || update.type === 'tp_hit') {
+      console.log('🔒 [Dashboard] Position closed, moving to closed list');
       setOpenPositions(prev => prev.filter(p => p.id !== update.position.id));
       setClosedPositions(prev => [{ ...update.position }, ...prev]);
     } else if (update.type === 'mtm_update' || update.type === 'modified') {
-      setOpenPositions(prev => prev.map(p => 
-        p.id === update.position.id ? { ...p, ...update.position } : p
-      ));
+      console.log('💹 [Dashboard] MTM update or modification, updating position values');
+      // Update position with new MTM values in real-time
+      setOpenPositions(prev => prev.map(p => {
+        if (String(p.id) !== String(update.position.id)) return p;
+        const newP = {
+          ...p,
+          currentPrice: update.position.currentPrice ?? p.currentPrice,
+          profit: update.position.profit ?? p.profit,
+          profitPercent: update.position.profitPercent ?? p.profitPercent,
+          stopLoss: update.position.stopLoss ?? p.stopLoss,
+          takeProfit: update.position.takeProfit ?? p.takeProfit,
+        };
+        if (newP.currentPrice !== p.currentPrice || newP.profit !== p.profit || newP.profitPercent !== p.profitPercent) {
+          console.log('✨ [Dashboard] Position value UPDATED in real-time:', {
+            id: p.id,
+            symbol: p.symbol,
+            from: { currentPrice: p.currentPrice, profit: p.profit, profitPercent: p.profitPercent },
+            to: { currentPrice: newP.currentPrice, profit: newP.profit, profitPercent: newP.profitPercent }
+          });
+        }
+        return newP;
+      }));
     }
   });
   
@@ -131,6 +175,69 @@ export default function HomeScreen() {
   });
   
   const notificationUpdates = useNotifications();
+  
+  // Listen for MTM updates (from Redis via WebSocket) to update positions in real-time
+  useEffect(() => {
+    const handleMTMUpdate = (data: any) => {
+      console.log('📊 [Dashboard] MTM Update received from WebSocket:', JSON.stringify(data, null, 2));
+      
+      // Handle batch updates (array of positions)
+      if (data.positions && Array.isArray(data.positions)) {
+        console.log(`📊 [Dashboard] Batch MTM update for ${data.positions.length} positions`);
+        setOpenPositions(prev => prev.map(p => {
+          const update = data.positions.find((pos: any) => String(pos.id) === String(p.id));
+          if (!update) return p;
+          
+          const newP = {
+            ...p,
+            currentPrice: update.currentPrice ?? p.currentPrice,
+            profit: update.profit ?? p.profit,
+            profitPercent: update.profitPercent ?? p.profitPercent,
+          };
+          
+          if (newP.currentPrice !== p.currentPrice || newP.profit !== p.profit) {
+            console.log('✨ [Dashboard] Position updated via BATCH MTM:', {
+              id: p.id,
+              symbol: p.symbol,
+              oldPrice: p.currentPrice,
+              newPrice: newP.currentPrice,
+              oldProfit: p.profit,
+              newProfit: newP.profit
+            });
+          }
+          return newP;
+        }));
+      }
+      // Handle single position update
+      else if (data.positionId && data.currentPrice !== undefined) {
+        console.log('📊 [Dashboard] Single position MTM update');
+        setOpenPositions(prev => prev.map(p => {
+          if (String(p.id) !== String(data.positionId)) return p;
+          const newP = {
+            ...p,
+            currentPrice: data.currentPrice,
+            profit: data.profit ?? p.profit,
+            profitPercent: data.profitPercent ?? p.profitPercent,
+          };
+          if (newP.currentPrice !== p.currentPrice || newP.profit !== p.profit || newP.profitPercent !== p.profitPercent) {
+            console.log('✨ [Dashboard] Position value CHANGED via MTM:', {
+              id: p.id,
+              symbol: p.symbol,
+              from: { currentPrice: p.currentPrice, profit: p.profit, profitPercent: p.profitPercent },
+              to: { currentPrice: newP.currentPrice, profit: newP.profit, profitPercent: newP.profitPercent }
+            });
+          }
+          return newP;
+        }));
+      }
+    };
+    
+    wsService.on(WS_EVENTS.PAPER_MTM_UPDATE, handleMTMUpdate);
+    
+    return () => {
+      wsService.off(WS_EVENTS.PAPER_MTM_UPDATE, handleMTMUpdate);
+    };
+  }, []);
   
   // Fetch initial data
   const fetchData = useCallback(async () => {
@@ -173,12 +280,21 @@ export default function HomeScreen() {
         setHasMoreClosed(historyRes.data.length >= 100);
       }
       
-      if (statsRes.success && statsRes.data) {
+      if (statsRes.success && statsRes.data && statsRes.data.stats) {
+        const backendStats = statsRes.data.stats;
+        console.log('Stats API response:', JSON.stringify(statsRes.data, null, 2));
+        console.log('Backend stats:', backendStats);
+        console.log('totalProfit:', backendStats.totalProfit);
+        console.log('openProfit:', backendStats.openProfit);
+        const calculatedPnl = (backendStats.totalProfit || 0) + (backendStats.openProfit || 0);
+        console.log('Calculated P&L:', calculatedPnl);
         setStats({
-          totalPnl: statsRes.data.totalPnl || 0,
-          openCount: statsRes.data.openPositions || 0,
-          closedCount: statsRes.data.closedPositions || 0,
+          totalPnl: calculatedPnl,
+          openCount: backendStats.openPositions || 0,
+          closedCount: backendStats.totalTrades || 0,
         });
+      } else {
+        console.log('Stats API failed or invalid:', statsRes);
       }
       
       if (walletRes.success && walletRes.data) {
@@ -207,6 +323,23 @@ export default function HomeScreen() {
   
   useEffect(() => {
     if (isAuthenticated) {
+      console.log('🔌 [Dashboard] User authenticated, checking WebSocket connection...');
+      const isConnected = wsService.isConnected();
+      console.log('🔌 [Dashboard] WebSocket connected:', isConnected);
+      
+      if (!isConnected) {
+        console.log('⚠️ [Dashboard] WebSocket not connected, attempting to connect...');
+        wsService.connect().then(() => {
+          console.log('✅ [Dashboard] WebSocket connection initiated');
+        }).catch((err) => {
+          console.error('❌ [Dashboard] WebSocket connection failed:', err);
+        });
+      } else {
+        console.log('✅ [Dashboard] WebSocket already connected, subscribing to updates...');
+        wsService.subscribePaperPrices();
+        wsService.subscribePaperMTM();
+      }
+      
       fetchData();
     } else {
       setIsLoading(false);
@@ -347,12 +480,26 @@ export default function HomeScreen() {
   };
   
   // Computed stats for display
+  // Compute today's closed positions (after 12am)
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+  const todayClosed = closedPositions.filter(p => {
+    const closeTime = p.closeTime || p.updatedAt || p.createdAt;
+    if (!closeTime) return false;
+    const positionCloseDate = new Date(closeTime);
+    return positionCloseDate >= todayStart;
+  });
+  const todayClosedCount = todayClosed.length;
+  
+  // Use totalPnl from API stats (matches web dashboard)
+  const totalPnl = stats.totalPnl || 0;
+  
   const STATS = [
     { 
       label: 'P&L', 
-      value: `$${Number(stats.totalPnl ?? 0).toFixed(2)}`, 
+      value: `$${Number(totalPnl).toFixed(2)}`, 
       icon: TrendUp, 
-      color: stats.totalPnl >= 0 ? '#10b981' : '#ef4444', 
+      color: totalPnl >= 0 ? '#10b981' : '#ef4444', 
     },
     { 
       label: 'Active', 
@@ -362,7 +509,7 @@ export default function HomeScreen() {
     },
     { 
       label: 'Closed', 
-      value: closedPositions.length.toString(), 
+      value: todayClosedCount.toString(), 
       icon: XCircle, 
       color: '#06b6d4', 
     },
@@ -419,9 +566,23 @@ export default function HomeScreen() {
     return positions.filter(p => p.market === selectedSegment);
   };
   
+  // Filter closed positions to show only today's data (after 12am)
+  const filterTodayClosed = (positions: any[]) => {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    
+    return positions.filter(p => {
+      const closeTime = p.closeTime || p.updatedAt || p.createdAt;
+      if (!closeTime) return false;
+      
+      const positionCloseDate = new Date(closeTime);
+      return positionCloseDate >= todayStart;
+    });
+  };
+  
   const filteredPositions = activeTab === 'open' 
     ? filterBySegment(openPositions)
-    : filterBySegment(closedPositions);
+    : filterBySegment(filterTodayClosed(closedPositions));
   
   // Debug logging
   React.useEffect(() => {
@@ -467,6 +628,59 @@ export default function HomeScreen() {
     setShowSLTPModal(true);
   };
 
+  // Keep a ref of the selected position id to avoid stale closures in WS handlers
+  useEffect(() => {
+    sltpIdRef.current = selectedPosition?.id ?? null;
+  }, [selectedPosition]);
+
+  // Subscribe to websocket MTM / position updates while the SL/TP modal is open
+  useEffect(() => {
+    if (!showSLTPModal || !sltpIdRef.current) return;
+
+    const handleMTMUpdate = (data: any) => {
+      // Batch updates
+      if (data.positions && Array.isArray(data.positions)) {
+        const update = data.positions.find((p: any) => String(p.id) === String(sltpIdRef.current));
+        if (update) {
+          setSelectedPosition(prev => prev ? ({
+            ...prev,
+            ltp: update.currentPrice ?? prev.ltp,
+            mtm: update.profit ?? prev.mtm,
+          }) : prev);
+        }
+        return;
+      }
+
+      // Single update payload
+      if (data.positionId && String(data.positionId) === String(sltpIdRef.current) && data.currentPrice !== undefined) {
+        setSelectedPosition(prev => prev ? ({
+          ...prev,
+          ltp: data.currentPrice ?? prev.ltp,
+          mtm: data.profit ?? prev.mtm,
+        }) : prev);
+      }
+    };
+
+    const handlePositionUpdate = (payload: any) => {
+      const pos = payload.position || payload;
+      if (!pos) return;
+      if (String(pos.id) !== String(sltpIdRef.current)) return;
+      setSelectedPosition(prev => prev ? ({
+        ...prev,
+        ltp: pos.currentPrice ?? prev.ltp,
+        mtm: pos.profit ?? prev.mtm,
+      }) : prev);
+    };
+
+    wsService.on(WS_EVENTS.PAPER_MTM_UPDATE, handleMTMUpdate);
+    wsService.on(WS_EVENTS.PAPER_POSITION_UPDATE, handlePositionUpdate);
+
+    return () => {
+      wsService.off(WS_EVENTS.PAPER_MTM_UPDATE, handleMTMUpdate);
+      wsService.off(WS_EVENTS.PAPER_POSITION_UPDATE, handlePositionUpdate);
+    };
+  }, [showSLTPModal]);
+
   const getGreeting = () => {
     const now = new Date();
     const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
@@ -489,12 +703,7 @@ export default function HomeScreen() {
       <View style={[styles.header, { backgroundColor: isDark ? '#0a0a2020' : '#ffffff40', borderBottomColor: theme.border }]}>
         <View style={styles.headerContent}>
           <View style={styles.topRow}>
-            <View style={styles.logoSection}>
-              <View style={styles.logoContainer}>
-                <Lightning size={24} color={colors.primary} weight="fill" />
-              </View>
-              <Text style={[styles.logoText, { color: theme.text }]}>Uptrender</Text>
-            </View>
+            <View></View>
             <View style={styles.headerActions}>
               <TouchableOpacity 
                 style={[styles.iconButton, { backgroundColor: theme.surfaceSecondary }]}
@@ -537,6 +746,8 @@ export default function HomeScreen() {
           />
         }
       >
+        {/* WebSocket connection status banner removed per request */}
+        
         {/* Stats Cards */}
         <View style={styles.statsContainer}>
           {STATS.map((stat, index) => {
@@ -878,27 +1089,21 @@ export default function HomeScreen() {
                     <Text style={[styles.mtmValue, { color: Number(formattedPosition.mtm ?? 0) >= 0 ? colors.success : colors.error }]}>
                       {Number(formattedPosition.mtm ?? 0) >= 0 ? '+' : ''}{Number(formattedPosition.mtm ?? 0).toFixed(2)} USD
                     </Text>
-                    {/* Status Badge */}
-                    <LinearGradient
-                      colors={
-                        activeTab === 'open' 
-                          ? ['rgba(245, 158, 11, 0.25)', 'rgba(245, 158, 11, 0.15)']
-                                  : (['Closed', 'Completed'].includes(formattedPosition.status as any))
-                                    ? ['rgba(16, 185, 129, 0.25)', 'rgba(16, 185, 129, 0.15)']
-                            : ['rgba(239, 68, 68, 0.25)', 'rgba(239, 68, 68, 0.15)']
-                      }
-                      style={styles.statusBadgeGlassy}
-                    >
-                      <Text style={[styles.statusBadgeText, { 
-                        color: activeTab === 'open' 
-                          ? '#F59E0B' 
-                          : (['Closed', 'Completed'].includes(formattedPosition.status as any)) 
-                            ? colors.success 
-                            : colors.error 
-                      }]}>
-                        {formattedPosition.status}
-                      </Text>
-                    </LinearGradient>
+                    {/* Mode Badge (Paper / Live) */}
+                    {(() => {
+                      const isPaper =
+                        formattedPosition.tradeMode === 'paper' ||
+                        (formattedPosition.broker && String(formattedPosition.broker).toLowerCase().includes('paper')) ||
+                        ((formattedPosition.orderId || formattedPosition.tradeId) && String((formattedPosition.orderId || formattedPosition.tradeId)).toLowerCase().includes('paper'));
+                      const badgeColors: readonly [string, string] = isPaper ? ['rgba(37, 99, 235, 0.12)', 'rgba(37, 99, 235, 0.06)'] : ['rgba(16, 185, 129, 0.12)', 'rgba(16, 185, 129, 0.06)'];
+                      const textColor = isPaper ? colors.primary : colors.success;
+                      const label = isPaper ? 'Paper' : 'Live';
+                      return (
+                        <LinearGradient colors={badgeColors} style={styles.statusBadgeGlassy}>
+                          <Text style={[styles.statusBadgeText, { color: textColor }]}>{label}</Text>
+                        </LinearGradient>
+                      );
+                    })()}
                   </View>
                 </View>
 
@@ -930,31 +1135,40 @@ export default function HomeScreen() {
                 </View>
 
                 {/* Action Buttons - Conditional for Open/Closed */}
-                {activeTab === 'open' ? (
-                  <View style={styles.positionActions}>
-                    <TouchableOpacity 
-                      style={[styles.tpSlButton, { 
-                        backgroundColor: isDark ? 'rgba(10, 10, 26, 0.8)' : 'rgba(241, 245, 249, 0.9)',
-                        borderColor: isDark ? 'rgba(26, 26, 53, 0.5)' : 'rgba(203, 213, 225, 0.8)',
-                      }]}
-                      onPress={() => handleSLTP(formattedPosition)}
-                    >
-                      <Text style={[styles.tpSlText, { color: theme.text }]}>TP/SL</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity 
-                      style={styles.closeButton}
-                      onPress={() => handleClosePosition(formattedPosition.id)}
-                    >
-                      <LinearGradient
-                        colors={['#EF4444', '#DC2626']}
-                        style={styles.closeButtonGradient}
+                {activeTab === 'open' ? (() => {
+                  const isPaper =
+                    formattedPosition.tradeMode === 'paper' ||
+                    (formattedPosition.broker && String(formattedPosition.broker).toLowerCase().includes('paper')) ||
+                    ((formattedPosition.orderId || formattedPosition.tradeId) && String((formattedPosition.orderId || formattedPosition.tradeId)).toLowerCase().includes('paper'));
+                  return (
+                    <View style={styles.positionActions}>
+                      <TouchableOpacity 
+                        style={[styles.tpSlButton, { 
+                          backgroundColor: isDark ? 'rgba(10, 10, 26, 0.8)' : 'rgba(241, 245, 249, 0.9)',
+                          borderColor: isDark ? 'rgba(26, 26, 53, 0.5)' : 'rgba(203, 213, 225, 0.8)',
+                          opacity: isPaper ? 0.5 : 1,
+                        }]}
+                        disabled={isPaper}
+                        onPress={() => { if (!isPaper) handleSLTP(formattedPosition); }}
                       >
-                        <Lightning size={14} color="#fff" weight="fill" />
-                        <Text style={styles.closeButtonText}>Close</Text>
-                      </LinearGradient>
-                    </TouchableOpacity>
-                  </View>
-                ) : (
+                        <Text style={[styles.tpSlText, { color: theme.text }]}>TP/SL</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity 
+                        style={[styles.closeButton, { opacity: isPaper ? 0.6 : 1 }]}
+                        disabled={isPaper}
+                        onPress={() => !isPaper && handleClosePosition(formattedPosition.id)}
+                      >
+                        <LinearGradient
+                          colors={['#EF4444', '#DC2626']}
+                          style={styles.closeButtonGradient}
+                        >
+                          <Lightning size={14} color="#fff" weight="fill" />
+                          <Text style={styles.closeButtonText}>Close</Text>
+                        </LinearGradient>
+                      </TouchableOpacity>
+                    </View>
+                  );
+                })() : (
                   <View style={styles.positionActions} />
                 )}
               </View>
@@ -1265,12 +1479,17 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   logoContainer: {
-    width: 36,
-    height: 36,
-    borderRadius: borderRadius.md,
-    backgroundColor: colors.primaryBg,
+    // width: 56,
+    // height: 56,
+    borderRadius: 0,
+    backgroundColor: 'transparent',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  logoImage: {
+    width: 84,
+    height: 40,
+    // resizeMode: 'contain',
   },
   logoText: {
     ...typography.h2,

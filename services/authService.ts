@@ -1,15 +1,7 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { api, ApiResponse } from './api';
 import { ENDPOINTS, STORAGE_KEYS } from './config';
+import { secureStorage, storage } from './storage';
 import { wsService } from './websocket';
-
-// Storage helpers
-const secureStorage = {
-  getItem: async (key: string) => AsyncStorage.getItem(key),
-  setItem: async (key: string, value: string) => AsyncStorage.setItem(key, value),
-  removeItem: async (key: string) => AsyncStorage.removeItem(key),
-};
-const storage = secureStorage;
 
 export interface User {
   id: number;
@@ -68,20 +60,22 @@ export interface AuthResponse {
 
 export const authService = {
   async login(credentials: LoginCredentials): Promise<AuthResponse> {
+    console.log('[authService] login payload:', credentials);
     const response = await api.post<any>(
-      ENDPOINTS.AUTH.LOGIN, 
+      ENDPOINTS.AUTH.LOGIN,
       credentials,
       { skipAuth: true }
     );
 
+    console.log('[authService] login raw response:', response);
+
     // Backend returns { message, token, refreshToken, user } directly on success
-    // Or { error: "message" } on failure
-    // API wrapper may return { success, data, error } or raw response
-    
+    // Or ApiResponse { success, data, error } from api wrapper
     const data = response.data || response;
-    const token = data.accessToken || data.token;
-    const refreshToken = data.refreshToken;
-    const user = data.user;
+    console.log('[authService] login normalized data:', data);
+    const token = data.accessToken || data.token || data?.data?.token || data?.data?.accessToken;
+    const refreshToken = data.refreshToken || data?.data?.refreshToken;
+    const user = data.user || data?.data?.user;
     
     // Check if login was successful (has token and user)
     if ((token || user) && !response.error && !data.error) {
@@ -92,7 +86,7 @@ export const authService = {
         await secureStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, refreshToken);
       }
       if (user) {
-        await storage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+        await storage.setItem(STORAGE_KEYS.USER, user);
       }
       
       // Connect WebSocket after successful login
@@ -136,7 +130,7 @@ export const authService = {
         await secureStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, refreshToken);
       }
       if (user) {
-        await storage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+        await storage.setItem(STORAGE_KEYS.USER, user);
       }
       
       // Connect WebSocket after successful registration
@@ -154,6 +148,51 @@ export const authService = {
     return {
       success: false,
       error: response.error || data.error || data.errors?.[0]?.msg || 'Registration failed',
+    };
+  },
+
+  async googleLogin(googleCredential: { email: string; name?: string; googleId?: string; avatar?: string }): Promise<AuthResponse> {
+    console.log('[authService] googleLogin payload:', googleCredential);
+    const response = await api.post<any>(
+      ENDPOINTS.AUTH.GOOGLE_LOGIN,
+      { credential: googleCredential },
+      { skipAuth: true }
+    );
+
+    console.log('[authService] googleLogin raw response:', response);
+
+    const data = response.data || response;
+    console.log('[authService] googleLogin normalized data:', data);
+    const token = data.accessToken || data.token;
+    const refreshToken = data.refreshToken;
+    const user = data.user;
+    
+    if ((token || user) && !response.error && !data.error) {
+      if (token) {
+        await secureStorage.setItem(STORAGE_KEYS.ACCESS_TOKEN, token);
+      }
+      if (refreshToken) {
+        await secureStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, refreshToken);
+      }
+      if (user) {
+        await storage.setItem(STORAGE_KEYS.USER, user);
+      }
+      
+      // Connect WebSocket after successful Google login
+      wsService.connect();
+      
+      return {
+        success: true,
+        user: user,
+        accessToken: token,
+        refreshToken: refreshToken,
+        message: data.message || 'Google login successful'
+      };
+    }
+
+    return {
+      success: false,
+      error: response.error || data.error || 'Google login failed',
     };
   },
 
@@ -175,8 +214,7 @@ export const authService = {
   },
 
   async getStoredUser(): Promise<User | null> {
-    const userStr = await storage.getItem(STORAGE_KEYS.USER);
-    return userStr ? JSON.parse(userStr) : null;
+    return await storage.getItem<User>(STORAGE_KEYS.USER);
   },
 
   async isAuthenticated(): Promise<boolean> {
@@ -188,7 +226,7 @@ export const authService = {
     const response = await api.get<User>(ENDPOINTS.USER.PROFILE);
     
     if (response.success && response.data) {
-      await storage.setItem(STORAGE_KEYS.USER, JSON.stringify(response.data));
+      await storage.setItem(STORAGE_KEYS.USER, response.data);
     }
     
     return response;
@@ -198,7 +236,7 @@ export const authService = {
     const response = await api.put<User>(ENDPOINTS.USER.PROFILE, data);
     
     if (response.success && response.data) {
-      await storage.setItem(STORAGE_KEYS.USER, JSON.stringify(response.data));
+      await storage.setItem(STORAGE_KEYS.USER, response.data);
     }
     
     return response;

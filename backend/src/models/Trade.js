@@ -110,6 +110,72 @@ const Trade = sequelize.define('Trade', {
       key: 'id'
     }
   },
+  // Parent-Child Architecture for multi-broker execution
+  parentTradeId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    references: {
+      model: 'trades',
+      key: 'id'
+    },
+    comment: 'Reference to parent trade for multi-broker execution'
+  },
+  isParent: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+    comment: 'True if this is a parent/signal trade, false for child/execution trades'
+  },
+  apiKeyId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    references: {
+      model: 'apikeys',
+      key: 'id'
+    },
+    comment: 'Reference to the broker API key used for this trade'
+  },
+  // Broker-specific price tracking
+  brokerBid: {
+    type: DataTypes.DECIMAL(20, 8),
+    allowNull: true,
+    comment: 'Current bid price from THIS broker'
+  },
+  brokerAsk: {
+    type: DataTypes.DECIMAL(20, 8),
+    allowNull: true,
+    comment: 'Current ask price from THIS broker'
+  },
+  brokerLastPrice: {
+    type: DataTypes.DECIMAL(20, 8),
+    allowNull: true,
+    comment: 'Last traded price from THIS broker'
+  },
+  lastPriceUpdate: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    comment: 'Timestamp of last price update from broker'
+  },
+  // Per-broker stop loss and take profit
+  stopLoss: {
+    type: DataTypes.DECIMAL(20, 8),
+    allowNull: true,
+    comment: 'Stop loss price for this specific broker execution'
+  },
+  takeProfit: {
+    type: DataTypes.DECIMAL(20, 8),
+    allowNull: true,
+    comment: 'Take profit price for this specific broker execution'
+  },
+  slTriggered: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+    comment: 'Whether stop loss was triggered for this broker'
+  },
+  tpTriggered: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+    comment: 'Whether take profit was triggered for this broker'
+  },
   brokerResponse: {
     // Legacy column in DB (TEXT) — kept for backward compatibility
     type: DataTypes.TEXT,
@@ -126,7 +192,10 @@ const Trade = sequelize.define('Trade', {
     { fields: ['userId'] },
     { fields: ['status'] },
     { fields: ['market'] },
-    { fields: ['date'] }
+    { fields: ['date'] },
+    { fields: ['parentTradeId'] },
+    { fields: ['apiKeyId'] },
+    { fields: ['strategyId', 'userId'] }
   ]
 });
 

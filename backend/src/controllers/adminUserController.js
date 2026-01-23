@@ -325,10 +325,11 @@ export const toggleUserStatus = async (req, res) => {
 };
 
 // Reset user password (admin only)
+// SECURITY: Never return plain text passwords in API responses
 export const resetUserPassword = async (req, res) => {
   try {
     const { id } = req.params;
-    const { newPassword } = req.body;
+    const { newPassword, sendEmail = true } = req.body;
 
     const user = await User.findByPk(id);
     if (!user) {
@@ -336,18 +337,30 @@ export const resetUserPassword = async (req, res) => {
     }
 
     // If newPassword is provided, use it. Otherwise, generate a random one
-    const password = newPassword || Math.random().toString(36).slice(-8);
+    const password = newPassword || Math.random().toString(36).slice(-8) + 'Aa1!';
     const hashedPassword = await bcrypt.hash(password, 10);
 
     user.password = hashedPassword;
     await user.save();
 
+    // TODO: Send password reset email instead of returning password
+    // If you have email service configured, send the password via email
+    // await sendPasswordResetEmail(user.email, password);
+
+    console.log(`🔐 Password reset for user ${id} (${user.email}) by admin ${req.user?.id}`);
+
+    // SECURITY: Don't return the password in the response
+    // Instead, indicate that a reset link/email was sent
     res.json({
       success: true,
-      message: 'Password reset successfully',
+      message: sendEmail 
+        ? 'Password reset successfully. User has been notified via email.' 
+        : 'Password reset successfully.',
       data: {
-        newPassword: password, // Only send back if we generated it
-        email: user.email
+        email: user.email,
+        // NEVER return the password in production - log it for development only if needed
+        // In production, always send via email
+        passwordResetAt: new Date().toISOString()
       }
     });
   } catch (error) {

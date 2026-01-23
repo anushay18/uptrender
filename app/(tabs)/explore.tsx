@@ -1,44 +1,46 @@
 import { colors, getTheme } from '@/constants/styles';
 import { useTheme } from '@/context/ThemeContext';
 import { apiKeyService } from '@/services/apiKeyService';
+import { strategyBrokerService } from '@/services/strategyBrokerService';
 import { strategyService } from '@/services/strategyService';
+import { useFocusEffect } from '@react-navigation/native';
 import * as Clipboard from 'expo-clipboard';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
-  ArrowClockwise,
-  Bank,
-  CaretDown,
-  CheckSquare,
-  Copy,
-  Eye,
-  Flask,
-  FloppyDisk,
-  GearSix,
-  Info,
-  Pause,
-  PencilSimple,
-  Play,
-  PlusCircle,
-  Sparkle,
-  Square,
-  Trash,
-  Warning,
-  X
+    ArrowClockwise,
+    Bank,
+    CaretDown,
+    CheckSquare,
+    Copy,
+    Eye,
+    Flask,
+    FloppyDisk,
+    GearSix,
+    Info,
+    Pause,
+    PencilSimple,
+    Play,
+    PlusCircle,
+    Sparkle,
+    Square,
+    Trash,
+    Warning,
+    X
 } from 'phosphor-react-native';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Modal,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Switch,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View
+    ActivityIndicator,
+    Alert,
+    Modal,
+    RefreshControl,
+    ScrollView,
+    StyleSheet,
+    Switch,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View
 } from 'react-native';
 
 export default function TabTwoScreen() {
@@ -75,7 +77,7 @@ export default function TabTwoScreen() {
   const [selectedStrategy, setSelectedStrategy] = useState<any>(null);
   const [apiKeys, setApiKeys] = useState<any[]>([]);
   const [brokers, setBrokers] = useState<any[]>([]);
-  const [selectedBrokers, setSelectedBrokers] = useState<string[]>([]);
+  const [selectedBrokers, setSelectedBrokers] = useState<number[]>([]);
 
   // Edit form states
   const [editName, setEditName] = useState('');
@@ -273,6 +275,14 @@ export default function TabTwoScreen() {
     fetchStrategies();
     fetchDrafts();
   }, []);
+
+  // Refetch data when tab comes into focus to sync with changes from other tabs
+  useFocusEffect(
+    useCallback(() => {
+      fetchStrategies();
+      fetchDrafts();
+    }, [])
+  );
 
   // Sync activeTab with route params
   useEffect(() => {
@@ -484,15 +494,29 @@ export default function TabTwoScreen() {
     setSelectedStrategy(strategy);
     setEditName(strategy.name || '');
     setEditSegment(strategy.segment || 'Indian');
-    setEditStrategyType(strategy.strategyType || 'Intraday');
     setEditCapital(String(strategy.capital || ''));
     setEditSymbol(strategy.symbol || '');
-    setEditSymbolValue(strategy.symbolValue || '');
+    setEditSymbolValue(String(strategy.symbolValue || ''));
     setEditLots(String(strategy.lots || 1));
     setEditDescription(strategy.description || '');
     setEditIsActive(strategy.isActive ?? true);
     setEditIsPublic(strategy.isPublic ?? false);
     setEditPrice(String(strategy.price || ''));
+    
+    // Load marketRisk config if exists
+    const marketRisk = strategy.marketRisk || {};
+    setEditStrategyType(marketRisk.strategyType || 'Intraday');
+    setEditInstrumentType(marketRisk.instrumentType || '');
+    setEditMarketType(marketRisk.marketType || '');
+    setEditOrderType(marketRisk.orderType || '');
+    setEditQuantity(String(marketRisk.quantity || ''));
+    setEditSlType(marketRisk.slType || 'Percent (%)');
+    setEditSlValue(String(marketRisk.slValue || ''));
+    setEditTpType(marketRisk.tpType || 'Percent (%)');
+    setEditTpValue(String(marketRisk.tpValue || ''));
+    setEditStopLossPercent(String(marketRisk.stopLossPercent || ''));
+    setEditTargetPercent(String(marketRisk.targetPercent || ''));
+    
     setShowEditModal(true);
   };
 
@@ -510,29 +534,41 @@ export default function TabTwoScreen() {
         'Cryptocurrency': 'Crypto',
       };
       
-      const updateData = {
+      // Only send fields that exist in the Strategy model
+      const updateData: Record<string, any> = {
         name: editName,
         segment: segmentMap[editSegment] || 'Indian',
-        strategyType: editStrategyType,
         capital: parseFloat(editCapital) || 10000,
         symbol: editSymbol,
-        symbolValue: editSymbolValue,
         lots: parseFloat(editLots) || 1,
         description: editDescription,
-        instrumentType: editInstrumentType,
-        marketType: editMarketType,
-        orderType: editOrderType,
-        quantity: parseFloat(editQuantity) || 0,
-        slType: editSlType,
-        slValue: parseFloat(editSlValue) || 0,
-        tpType: editTpType,
-        tpValue: parseFloat(editTpValue) || 0,
-        stopLossPercent: parseFloat(editStopLossPercent) || 0,
-        targetPercent: parseFloat(editTargetPercent) || 0,
         isActive: editIsActive,
         isPublic: editIsPublic,
         price: editIsPublic ? parseFloat(editPrice) || 0 : 0,
       };
+      
+      // Add symbolValue if provided
+      if (editSymbolValue) {
+        updateData.symbolValue = parseFloat(editSymbolValue) || 0;
+      }
+      
+      // Store additional risk/market config in marketRisk JSON field
+      const marketRiskConfig: Record<string, any> = {};
+      if (editInstrumentType) marketRiskConfig.instrumentType = editInstrumentType;
+      if (editMarketType) marketRiskConfig.marketType = editMarketType;
+      if (editOrderType) marketRiskConfig.orderType = editOrderType;
+      if (editQuantity) marketRiskConfig.quantity = parseFloat(editQuantity) || 0;
+      if (editSlType) marketRiskConfig.slType = editSlType;
+      if (editSlValue) marketRiskConfig.slValue = parseFloat(editSlValue) || 0;
+      if (editTpType) marketRiskConfig.tpType = editTpType;
+      if (editTpValue) marketRiskConfig.tpValue = parseFloat(editTpValue) || 0;
+      if (editStopLossPercent) marketRiskConfig.stopLossPercent = parseFloat(editStopLossPercent) || 0;
+      if (editTargetPercent) marketRiskConfig.targetPercent = parseFloat(editTargetPercent) || 0;
+      if (editStrategyType) marketRiskConfig.strategyType = editStrategyType;
+      
+      if (Object.keys(marketRiskConfig).length > 0) {
+        updateData.marketRisk = marketRiskConfig;
+      }
       
       const response = await strategyService.updateStrategy(selectedStrategy.id, updateData);
       
@@ -551,11 +587,20 @@ export default function TabTwoScreen() {
   // Broker selection handler
   const handleOpenBrokerModal = async (strategy: any) => {
     setSelectedStrategy(strategy);
+    setSelectedBrokers([]);
     try {
-      const response = await apiKeyService.getApiKeys();
-      if (response.success && response.data) {
-        setBrokers(response.data);
-        setSelectedBrokers(strategy.brokers || []);
+      // Fetch all user's API keys
+      const apiKeysResponse = await apiKeyService.getApiKeys();
+      if (apiKeysResponse.success && apiKeysResponse.data) {
+        setBrokers(apiKeysResponse.data);
+      }
+      
+      // Fetch brokers already linked to this strategy
+      const strategyBrokersResponse = await strategyBrokerService.getStrategyBrokers(strategy.id);
+      if (strategyBrokersResponse.success && strategyBrokersResponse.data) {
+        // Extract the apiKeyIds of linked brokers
+        const linkedApiKeyIds = strategyBrokersResponse.data.map((sb: any) => sb.apiKeyId);
+        setSelectedBrokers(linkedApiKeyIds);
       }
     } catch (error) {
       console.error('Error fetching brokers:', error);
@@ -564,7 +609,7 @@ export default function TabTwoScreen() {
   };
 
   // Toggle broker selection
-  const toggleBrokerSelection = (brokerId: string) => {
+  const toggleBrokerSelection = (brokerId: number) => {
     setSelectedBrokers(prev => 
       prev.includes(brokerId) 
         ? prev.filter(id => id !== brokerId)
@@ -572,17 +617,56 @@ export default function TabTwoScreen() {
     );
   };
 
-  // Toggle trade mode
+  // Toggle trade mode - uses subscription endpoint like website
   const handleToggleTradeMode = async (strategy: any) => {
     const newMode = strategy.tradeMode === 'paper' ? 'live' : 'paper';
+    const subscriptionId = strategy.subscriptionId;
+    
+    console.log(`[TradeMode Toggle] Strategy ${strategy.id}: ${strategy.tradeMode} -> ${newMode}, subscriptionId: ${subscriptionId}`);
+    
+    if (!subscriptionId) {
+      Alert.alert('Error', 'No subscription found for this strategy');
+      return;
+    }
+    
+    // Optimistic UI update
+    setSavedStrategies(prev => prev.map(s => 
+      s.id === strategy.id ? { ...s, tradeMode: newMode } : s
+    ));
+    
     try {
-      const response = await strategyService.updateStrategy(strategy.id, { tradeMode: newMode });
-      if (response.success) {
-        fetchStrategies();
-      } else {
+      console.log(`[TradeMode Toggle] Calling setTradeMode API for subscription ${subscriptionId} with mode: ${newMode}`);
+      const response = await strategyService.setTradeMode(subscriptionId, newMode);
+      console.log(`[TradeMode Toggle] API Response:`, response);
+      if (!response.success) {
+        // Revert on error
+        console.log(`[TradeMode Toggle] API returned error, reverting...`);
+        setSavedStrategies(prev => prev.map(s => 
+          s.id === strategy.id ? { ...s, tradeMode: strategy.tradeMode } : s
+        ));
         Alert.alert('Error', response.error || 'Failed to update trade mode');
+      } else {
+        console.log(`[TradeMode Toggle] Success! Trade mode updated to ${newMode}`);
+        // Refresh from server to ensure UI matches backend authoritative state
+        try {
+          await fetchStrategies();
+        } catch (e) {
+          console.log('[TradeMode Toggle] Warning: failed to refresh strategies after update', e);
+        }
+        // Show success message with backend text if available
+        try {
+          const successMsg = response?.message || `Trade Mode: ${newMode === 'live' ? 'Live' : 'Paper'}`;
+          Alert.alert('Trade Mode', successMsg);
+        } catch (e) {
+          console.log('[TradeMode Toggle] Warning: failed to show success alert', e);
+        }
       }
     } catch (error: any) {
+      // Revert on error
+      console.log(`[TradeMode Toggle] Exception occurred:`, error);
+      setSavedStrategies(prev => prev.map(s => 
+        s.id === strategy.id ? { ...s, tradeMode: strategy.tradeMode } : s
+      ));
       Alert.alert('Error', error.message || 'Failed to update trade mode');
     }
   };
@@ -611,20 +695,24 @@ export default function TabTwoScreen() {
   // Optimistic toggle for pause/resume (isPaused separate from isActive)
   const toggleStrategyPaused = async (strategyId: number, currentlyPaused: boolean) => {
     const intendedPaused = !currentlyPaused;
-    // optimistic UI
-    setSavedStrategies(prev => prev.map(s => s.id === strategyId ? { ...s, isPaused: intendedPaused } : s));
+    // optimistic UI - update immediately
+    setSavedStrategies(prev => prev.map(s => 
+      s.id === strategyId ? { ...s, isPaused: intendedPaused, isStopped: intendedPaused, stopped: intendedPaused } : s
+    ));
 
     try {
       const response = await strategyService.updateStrategy(strategyId, { isPaused: intendedPaused });
       if (response && response.success) {
-        Alert.alert('Success', intendedPaused ? 'Strategy paused successfully' : 'Strategy resumed successfully');
-        fetchStrategies();
+        // Success message without Alert to avoid blocking UI
+        console.log('✅ Strategy pause toggled:', intendedPaused ? 'paused' : 'resumed');
       } else {
         throw new Error(response?.error || 'Unknown error');
       }
     } catch (error: any) {
       // revert on failure
-      fetchStrategies();
+      setSavedStrategies(prev => prev.map(s => 
+        s.id === strategyId ? { ...s, isPaused: !intendedPaused, isStopped: !intendedPaused, stopped: !intendedPaused } : s
+      ));
       Alert.alert('Error', error?.message || 'Failed to update pause status');
     }
   };
@@ -633,6 +721,13 @@ export default function TabTwoScreen() {
   const copyWebhookUrl = async () => {
     await Clipboard.setStringAsync('https://app.uptrender.in/api/algo-trades/webhook');
     Alert.alert('Copied', 'Webhook URL copied to clipboard');
+  };
+
+  // Copy TradingView alert message
+  const copyAlertMessage = async (webhookSecret: string) => {
+    const message = `{ "secret": "${webhookSecret}", "signal": "{{strategy.position_size}}" }`;
+    await Clipboard.setStringAsync(message);
+    Alert.alert('Copied', 'TradingView alert message copied to clipboard');
   };
 
   return (
@@ -1951,11 +2046,10 @@ export default function TabTwoScreen() {
                             Header "Pause All" (effectiveHeaderHasAnyActive true) → show Play icon on card
                             Header "Active All" (effectiveHeaderHasAnyActive false) → show Pause icon on card */}
                         <TouchableOpacity 
-                          style={[styles.compactActionBtn, { backgroundColor: !effectiveHeaderHasAnyActive ? '#FEF3C7' : '#D1FAE5' }]}
+                          style={[styles.compactActionBtn, { backgroundColor: strategy.isPaused ? '#FEF3C7' : '#D1FAE5' }]}
                           onPress={() => toggleStrategyPaused(strategy.id, strategy.isPaused)}
                         >
-                          
-                          {!effectiveHeaderHasAnyActive ? (
+                          {strategy.isPaused ? (
                             <Play size={14} color="#F59E0B" weight="fill" />
                           ) : (
                             <Pause size={14} color="#10B981" weight="fill" />
@@ -2149,37 +2243,37 @@ export default function TabTwoScreen() {
                     <View style={styles.infoRow}>
                       <View style={styles.infoItem}>
                         <Text style={[styles.infoItemLabel, { color: theme.textSecondary }]}>Instrument</Text>
-                        <Text style={[styles.infoItemValue, { color: theme.text }]}>{selectedStrategy.instrumentType || 'N/A'}</Text>
+                        <Text style={[styles.infoItemValue, { color: theme.text }]}>{selectedStrategy.marketRisk?.instrumentType || 'N/A'}</Text>
                       </View>
                       <View style={styles.infoItem}>
                         <Text style={[styles.infoItemLabel, { color: theme.textSecondary }]}>Market Type</Text>
-                        <Text style={[styles.infoItemValue, { color: theme.text }]}>{selectedStrategy.marketType || 'N/A'}</Text>
+                        <Text style={[styles.infoItemValue, { color: theme.text }]}>{selectedStrategy.marketRisk?.marketType || 'N/A'}</Text>
                       </View>
                     </View>
                     <View style={styles.infoRow}>
                       <View style={styles.infoItem}>
                         <Text style={[styles.infoItemLabel, { color: theme.textSecondary }]}>Order Type</Text>
-                        <Text style={[styles.infoItemValue, { color: theme.text }]}>{selectedStrategy.orderType || 'N/A'}</Text>
+                        <Text style={[styles.infoItemValue, { color: theme.text }]}>{selectedStrategy.marketRisk?.orderType || 'N/A'}</Text>
                       </View>
                       <View style={styles.infoItem}>
                         <Text style={[styles.infoItemLabel, { color: theme.textSecondary }]}>SL</Text>
-                        <Text style={[styles.infoItemValue, { color: theme.text }]}>{selectedStrategy.slValue || 'N/A'}</Text>
+                        <Text style={[styles.infoItemValue, { color: theme.text }]}>{selectedStrategy.marketRisk?.slValue || 'N/A'}</Text>
                       </View>
                     </View>
                     <View style={styles.infoRow}>
                       <View style={styles.infoItem}>
                         <Text style={[styles.infoItemLabel, { color: theme.textSecondary }]}>TP</Text>
-                        <Text style={[styles.infoItemValue, { color: theme.text }]}>{selectedStrategy.tpValue || 'N/A'}</Text>
+                        <Text style={[styles.infoItemValue, { color: theme.text }]}>{selectedStrategy.marketRisk?.tpValue || 'N/A'}</Text>
                       </View>
                       <View style={styles.infoItem}>
                         <Text style={[styles.infoItemLabel, { color: theme.textSecondary }]}>Stop Loss %</Text>
-                        <Text style={[styles.infoItemValue, { color: theme.text }]}>{selectedStrategy.stopLossPercent || 'N/A'}</Text>
+                        <Text style={[styles.infoItemValue, { color: theme.text }]}>{selectedStrategy.marketRisk?.stopLossPercent || 'N/A'}</Text>
                       </View>
                     </View>
                     <View style={styles.infoRow}>
                       <View style={styles.infoItem}>
                         <Text style={[styles.infoItemLabel, { color: theme.textSecondary }]}>Target %</Text>
-                        <Text style={[styles.infoItemValue, { color: theme.text }]}>{selectedStrategy.targetPercent || 'N/A'}</Text>
+                        <Text style={[styles.infoItemValue, { color: theme.text }]}>{selectedStrategy.marketRisk?.targetPercent || 'N/A'}</Text>
                       </View>
                     </View>
                   </View>
@@ -2233,10 +2327,11 @@ export default function TabTwoScreen() {
                     </View>
                     
                     <Text style={[styles.webhookLabel, { color: theme.textSecondary, marginTop: 12 }]}>TradingView Alert Message Format:</Text>
-                    <View style={[styles.codeBox, { backgroundColor: '#D1FAE5' }]}>
-                      <Text style={[styles.codeText, { color: '#065F46' }]}>\
-                        {`{ \"secret\": \"${selectedStrategy && selectedStrategy.id ? String(selectedStrategy.id).slice(0, 8) : 'XXXXXX'}\", \"signal\": \"{{strategy.position_size}}\" }`}\
-                      </Text>
+                    <View style={[styles.codeBox, { backgroundColor: '#D1FAE5', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]}>
+                      <Text style={[styles.codeText, { color: '#065F46', flex: 1 }]}>{`{ "secret": "${selectedStrategy?.webhookSecret || 'LOADING...'}", "signal": "{{strategy.position_size}}" }`}</Text>
+                      <TouchableOpacity onPress={() => selectedStrategy?.webhookSecret && copyAlertMessage(selectedStrategy.webhookSecret)}>
+                        <Copy size={16} color="#047857" weight="bold" />
+                      </TouchableOpacity>
                     </View>
                     <Text style={[styles.webhookHint, { color: '#059669' }]}>
                       ✓ Copy this exact message to TradingView alert
@@ -2796,13 +2891,27 @@ export default function TabTwoScreen() {
                   <Text style={[styles.modalCancelBtnText, { color: theme.text }]}>Cancel</Text>
                 </TouchableOpacity>
                 <TouchableOpacity 
-                  style={[styles.modalSaveBtn, { backgroundColor: colors.primary, opacity: selectedBrokers.length === 0 ? 0.5 : 1 }]}
-                  onPress={() => {
-                    // Save broker selection
-                    setShowBrokerModal(false);
-                    Alert.alert('Success', 'Broker selection saved');
+                  style={[styles.modalSaveBtn, { backgroundColor: colors.primary }]}
+                  onPress={async () => {
+                    if (!selectedStrategy) return;
+                    try {
+                      // Use bulk update API to save broker selections
+                      const response = await strategyBrokerService.updateStrategyBrokers(
+                        selectedStrategy.id, 
+                        selectedBrokers
+                      );
+                      if (response.success) {
+                        setShowBrokerModal(false);
+                        Alert.alert('Success', 'Broker selection saved successfully');
+                        fetchStrategies(); // Refresh to show updated brokers
+                      } else {
+                        Alert.alert('Error', response.error || 'Failed to save broker selection');
+                      }
+                    } catch (error: any) {
+                      console.error('Error saving brokers:', error);
+                      Alert.alert('Error', error.message || 'Failed to save broker selection');
+                    }
                   }}
-                  disabled={selectedBrokers.length === 0}
                 >
                   <Text style={styles.modalSaveBtnText}>Save Changes</Text>
                 </TouchableOpacity>
@@ -3614,10 +3723,10 @@ const styles = StyleSheet.create({
   lotsInputContainer: {
     borderWidth: 1,
     borderRadius: 6,
-    paddingHorizontal: 6,
-    paddingVertical: 4,
-    width: 40,
-    maxWidth: 40,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    width:50,
+    maxWidth: 50,
   },
   lotsInput: {
     fontSize: 11,

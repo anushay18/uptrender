@@ -220,7 +220,7 @@ export const strategyService = {
 
   // Subscribe to strategy
   async subscribe(strategyId: number, data: SubscribeData): Promise<ApiResponse<StrategySubscription>> {
-    return await api.post<StrategySubscription>(ENDPOINTS.SUBSCRIPTIONS.SUBSCRIBE(strategyId), data);
+    return await api.post<StrategySubscription>(ENDPOINTS.SUBSCRIPTIONS.SUBSCRIBE, { strategyId, ...data });
   },
 
   // Unsubscribe from strategy

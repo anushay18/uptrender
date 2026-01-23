@@ -5,7 +5,9 @@ import { Op } from 'sequelize';
 export const getUserApiKeys = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { segment, status, page = 1, limit = 10 } = req.query;
+    const { segment, status, page = 1, limit = 100 } = req.query;
+
+    console.log(`🔑 [getUserApiKeys] Fetching API keys for userId: ${userId}`);
 
     const where = { userId };
     if (segment) where.segment = segment;
@@ -20,6 +22,9 @@ export const getUserApiKeys = async (req, res) => {
       order: [['createdAt', 'DESC']],
       attributes: { exclude: ['apiKey', 'apiSecret'] } // Don't send actual keys
     });
+
+    console.log(`🔑 [getUserApiKeys] Found ${apiKeys.count} API keys for userId ${userId}`);
+    console.log(`🔑 [getUserApiKeys] API Key IDs: ${apiKeys.rows.map(k => k.id).join(', ')}`);
 
     // Map fields for frontend compatibility
     const mappedApiKeys = apiKeys.rows.map(apiKey => {
@@ -44,7 +49,7 @@ export const getUserApiKeys = async (req, res) => {
     });
   } catch (error) {
     console.error('Get API keys error:', error);
-    res.status(500).json({ error: 'Failed to fetch API keys' });
+    res.status(500).json({ error: 'Unable to load broker accounts. Please refresh the page' });
   }
 };
 
@@ -182,6 +187,9 @@ export const createApiKey = async (req, res) => {
 
     await transaction.commit();
 
+    // Note: Broker streaming removed - now using centralized streaming for Forex
+    // Crypto still uses CCXT Pro on-demand during trade execution
+
     // Don't return actual keys in response and map fields for frontend
     const response = newApiKey.toJSON();
     delete response.apiKey;
@@ -247,7 +255,7 @@ export const getApiKeyById = async (req, res) => {
     });
   } catch (error) {
     console.error('Get API key error:', error);
-    res.status(500).json({ error: 'Failed to fetch API key' });
+    res.status(500).json({ error: 'Unable to load broker account details. Please try again' });
   }
 };
 
@@ -312,7 +320,7 @@ export const updateApiKey = async (req, res) => {
     });
   } catch (error) {
     console.error('Update API key error:', error);
-    res.status(500).json({ error: 'Failed to update API key' });
+    res.status(500).json({ error: 'Unable to update broker account. Please check your inputs and try again' });
   }
 };
 
@@ -338,7 +346,7 @@ export const deleteApiKey = async (req, res) => {
     });
   } catch (error) {
     console.error('Delete API key error:', error);
-    res.status(500).json({ error: 'Failed to delete API key' });
+    res.status(500).json({ error: 'Unable to delete broker account. Please try again' });
   }
 };
 
@@ -513,7 +521,7 @@ export const setDefaultApiKey = async (req, res) => {
     });
   } catch (error) {
     console.error('Set default API key error:', error);
-    res.status(500).json({ error: 'Failed to set default API key' });
+    res.status(500).json({ error: 'Unable to set default broker account. Please try again' });
   }
 };
 
@@ -555,7 +563,7 @@ export const getAllApiKeys = async (req, res) => {
     });
   } catch (error) {
     console.error('Get all API keys error:', error);
-    res.status(500).json({ error: 'Failed to fetch API keys' });
+    res.status(500).json({ error: 'Unable to load broker accounts. Please refresh the page' });
   }
 };
 
@@ -630,29 +638,22 @@ export const refreshBalance = async (req, res) => {
           error = balanceResult.error || 'Failed to fetch balance';
         }
       } else if (apiKey.segment === 'Forex' && apiKey.appName && apiKey.accessToken) {
-        // MT5 balance refresh logic (existing)
-        const { MetaApi } = await import('metaapi.cloud-sdk');
-        const metaApiToken = process.env.METAAPI_TOKEN;
+        // MT5 balance refresh using algoengine broker
+        console.log(`🔄 Refreshing MT5 balance for API (ID: ${id})`);
         
-        if (!metaApiToken) {
-          throw new Error('MetaAPI token not configured');
+        const { mt5Broker } = await import('../../algoengine/index.js');
+        
+        // Check if already initialized
+        const isConnected = await mt5Broker.healthCheck();
+        if (!isConnected) {
+          await mt5Broker.initialize({
+            apiKey: apiKey.accessToken,
+            accountId: apiKey.appName
+          });
         }
         
-        const api = new MetaApi(metaApiToken);
-        const account = await api.metatraderAccountApi.getAccount(apiKey.appName);
-        
-        if (!account) {
-          throw new Error('MetaAPI account not found');
-        }
-        
-        await account.deploy();
-        await account.waitDeployed();
-        
-        const connection = account.getRPCConnection();
-        await connection.connect();
-        await connection.waitSynchronized();
-        
-        const accountInfo = await connection.getAccountInformation();
+        // Get account information
+        const accountInfo = await mt5Broker.getAccountInfo();
         balance = parseFloat(accountInfo.balance) || 0;
         
         console.log(`✅ MT5 balance refreshed: ${balance}`);

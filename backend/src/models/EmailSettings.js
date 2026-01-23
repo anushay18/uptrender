@@ -56,13 +56,28 @@ const EmailSettings = sequelize.define('EmailSettings', {
   },
   sendTradeNotifications: {
     type: DataTypes.BOOLEAN,
-    defaultValue: false,
+    defaultValue: true,
     field: 'send_trade_notifications',
   },
   sendStrategyAlerts: {
     type: DataTypes.BOOLEAN,
-    defaultValue: false,
+    defaultValue: true,
     field: 'send_strategy_alerts',
+  },
+  sendTicketUpdates: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: true,
+    field: 'send_ticket_updates',
+  },
+  sendMarketplaceUpdates: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: true,
+    field: 'send_marketplace_updates',
+  },
+  sendSubscriptionAlerts: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: true,
+    field: 'send_subscription_alerts',
   },
   isActive: {
     type: DataTypes.BOOLEAN,

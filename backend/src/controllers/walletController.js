@@ -27,7 +27,7 @@ export const getUserWallet = async (req, res) => {
     });
   } catch (error) {
     console.error('Get wallet error:', error);
-    res.status(500).json({ error: 'Failed to fetch wallet' });
+    res.status(500).json({ error: 'Unable to load wallet balance. Please refresh the page' });
   }
 };
 
@@ -66,7 +66,7 @@ export const getWalletTransactions = async (req, res) => {
     });
   } catch (error) {
     console.error('Get transactions error:', error);
-    res.status(500).json({ error: 'Failed to fetch transactions' });
+    res.status(500).json({ error: 'Unable to load transaction history. Please try again' });
   }
 };
 
@@ -142,7 +142,7 @@ export const addFunds = async (req, res) => {
     });
   } catch (error) {
     console.error('Add funds error:', error);
-    res.status(500).json({ error: 'Failed to add funds' });
+    res.status(500).json({ error: 'Unable to add funds. Please try again later' });
   }
 };
 
@@ -216,7 +216,7 @@ export const withdrawFunds = async (req, res) => {
     });
   } catch (error) {
     console.error('Withdraw funds error:', error);
-    res.status(500).json({ error: 'Failed to withdraw funds' });
+    res.status(500).json({ error: 'Unable to process withdrawal. Please try again later' });
   }
 };
 
@@ -269,13 +269,21 @@ export const getWalletStats = async (req, res) => {
     });
   } catch (error) {
     console.error('Get wallet stats error:', error);
-    res.status(500).json({ error: 'Failed to fetch wallet statistics' });
+    res.status(500).json({ error: 'Unable to load wallet statistics. Please try again' });
   }
 };
 
-// Freeze wallet (admin/security)
+// Freeze wallet (admin only)
 export const freezeWallet = async (req, res) => {
   try {
+    // Admin authorization check
+    if (!req.user || req.user.role !== 'admin') {
+      return res.status(403).json({ 
+        success: false,
+        error: 'Access denied. Admin privileges required.' 
+      });
+    }
+
     const { userId } = req.params;
 
     const wallet = await Wallet.findOne({ where: { userId } });
@@ -285,6 +293,8 @@ export const freezeWallet = async (req, res) => {
 
     await wallet.update({ status: 'Frozen' });
 
+    console.log(`🔒 Wallet frozen for user ${userId} by admin ${req.user.id}`);
+
     res.json({
       success: true,
       message: 'Wallet frozen successfully',
@@ -292,13 +302,21 @@ export const freezeWallet = async (req, res) => {
     });
   } catch (error) {
     console.error('Freeze wallet error:', error);
-    res.status(500).json({ error: 'Failed to freeze wallet' });
+    res.status(500).json({ error: 'Unable to freeze wallet. Please try again' });
   }
 };
 
-// Unfreeze wallet (admin)
+// Unfreeze wallet (admin only)
 export const unfreezeWallet = async (req, res) => {
   try {
+    // Admin authorization check
+    if (!req.user || req.user.role !== 'admin') {
+      return res.status(403).json({ 
+        success: false,
+        error: 'Access denied. Admin privileges required.' 
+      });
+    }
+
     const { userId } = req.params;
 
     const wallet = await Wallet.findOne({ where: { userId } });
@@ -308,6 +326,8 @@ export const unfreezeWallet = async (req, res) => {
 
     await wallet.update({ status: 'Active' });
 
+    console.log(`🔓 Wallet unfrozen for user ${userId} by admin ${req.user.id}`);
+
     res.json({
       success: true,
       message: 'Wallet unfrozen successfully',
@@ -315,7 +335,7 @@ export const unfreezeWallet = async (req, res) => {
     });
   } catch (error) {
     console.error('Unfreeze wallet error:', error);
-    res.status(500).json({ error: 'Failed to unfreeze wallet' });
+    res.status(500).json({ error: 'Unable to unfreeze wallet. Please try again' });
   }
 };
 
@@ -361,7 +381,7 @@ export const getAllWallets = async (req, res) => {
     });
   } catch (error) {
     console.error('Get all wallets error:', error);
-    res.status(500).json({ error: 'Failed to fetch wallets' });
+    res.status(500).json({ error: 'Unable to load wallets. Please refresh the page' });
   }
 };
 
@@ -380,30 +400,8 @@ export const adminTransferFunds = async (req, res) => {
       return res.status(400).json({ error: 'Invalid amount' });
     }
 
-    // Get admin wallet
-    let adminWallet = await Wallet.findOne({
-      where: { userId: adminId },
-      transaction
-    });
-
-    if (!adminWallet) {
-      adminWallet = await Wallet.create({
-        userId: adminId,
-        balance: 0,
-        currency: 'INR',
-        status: 'Active'
-      }, { transaction });
-    }
-
-    // Check admin balance
-    if (adminWallet.balance < amount) {
-      await transaction.rollback();
-      return res.status(400).json({ 
-        error: 'Insufficient balance in admin wallet',
-        adminBalance: adminWallet.balance,
-        required: amount
-      });
-    }
+    // Check if admin is adding to their own account
+    const isSelfTransfer = parseInt(adminId) === parseInt(userId);
 
     // Get or create user wallet
     let userWallet = await Wallet.findOne({
@@ -420,76 +418,138 @@ export const adminTransferFunds = async (req, res) => {
       }, { transaction });
     }
 
-    // Update balances
-    await adminWallet.update({
-      balance: parseFloat(adminWallet.balance) - parseFloat(amount)
-    }, { transaction });
+    // Get or create admin wallet
+    let adminWallet = await Wallet.findOne({
+      where: { userId: adminId },
+      transaction
+    });
 
-    await userWallet.update({
-      balance: parseFloat(userWallet.balance) + parseFloat(amount)
-    }, { transaction });
+    if (!adminWallet) {
+      adminWallet = await Wallet.create({
+        userId: adminId,
+        balance: 0,
+        currency: 'INR',
+        status: 'Active'
+      }, { transaction });
+    }
 
-    // Create admin debit transaction
-    await WalletTransaction.create({
-      walletId: adminWallet.id,
-      type: 'DEBIT',
-      amount: parseFloat(amount),
-      description: `${description} (Transfer to user ID: ${userId})`,
-      reference: `ADMIN_TRANSFER_${Date.now()}`,
-      status: 'COMPLETED'
-    }, { transaction });
+    if (isSelfTransfer) {
+      // Admin adding to own account - just credit
+      await adminWallet.update({
+        balance: parseFloat(adminWallet.balance) + parseFloat(amount)
+      }, { transaction });
+    } else {
+      // Admin transferring to another user - deduct from admin, credit to user
+      
+      // Check admin balance for transfers to others
+      if (adminWallet.balance < amount) {
+        await transaction.rollback();
+        return res.status(400).json({ 
+          error: 'Insufficient balance in admin wallet',
+          adminBalance: adminWallet.balance,
+          required: amount
+        });
+      }
 
-    // Create user credit transaction
-    await WalletTransaction.create({
-      walletId: userWallet.id,
-      type: 'CREDIT',
-      amount: parseFloat(amount),
-      description: `${description} (From admin)`,
-      reference: `ADMIN_TRANSFER_${Date.now()}`,
-      status: 'COMPLETED'
-    }, { transaction });
+      // Deduct from admin
+      await adminWallet.update({
+        balance: parseFloat(adminWallet.balance) - parseFloat(amount)
+      }, { transaction });
 
-    // Create notification for user
-    await Notification.create({
-      userId: userId,
-      title: 'Wallet Credit',
-      message: `₹${amount} has been credited to your wallet by admin`,
-      type: 'wallet_credit',
-      data: { amount }
-    }, { transaction });
+      // Credit to user
+      await userWallet.update({
+        balance: parseFloat(userWallet.balance) + parseFloat(amount)
+      }, { transaction });
+    }
+
+    // Create transaction records
+    if (isSelfTransfer) {
+      // Admin adding to own account - single credit transaction
+      await WalletTransaction.create({
+        walletId: adminWallet.id,
+        type: 'CREDIT',
+        amount: parseFloat(amount),
+        description: `${description} (Self-credit by admin)`,
+        reference: `ADMIN_SELF_CREDIT_${Date.now()}`,
+        status: 'COMPLETED'
+      }, { transaction });
+    } else {
+      // Admin transferring to user - debit and credit transactions
+      
+      // Create admin debit transaction
+      await WalletTransaction.create({
+        walletId: adminWallet.id,
+        type: 'DEBIT',
+        amount: parseFloat(amount),
+        description: `${description} (Transfer to user ID: ${userId})`,
+        reference: `ADMIN_TRANSFER_${Date.now()}`,
+        status: 'COMPLETED'
+      }, { transaction });
+
+      // Create user credit transaction
+      await WalletTransaction.create({
+        walletId: userWallet.id,
+        type: 'CREDIT',
+        amount: parseFloat(amount),
+        description: `${description} (From admin)`,
+        reference: `ADMIN_TRANSFER_${Date.now()}`,
+        status: 'COMPLETED'
+      }, { transaction });
+
+      // Create notification for user
+      await Notification.create({
+        userId: userId,
+        title: 'Wallet Credit',
+        message: `₹${amount} has been credited to your wallet by admin`,
+        type: 'wallet_credit',
+        data: { amount }
+      }, { transaction });
+    }
 
     await transaction.commit();
 
     // Emit real-time updates
-    emitWalletUpdate(adminId, {
-      balance: adminWallet.balance - amount,
-      lastTransaction: { type: 'DEBIT', amount }
-    });
+    if (isSelfTransfer) {
+      emitWalletUpdate(adminId, {
+        balance: parseFloat(adminWallet.balance) + parseFloat(amount),
+        lastTransaction: { type: 'CREDIT', amount }
+      });
+    } else {
+      emitWalletUpdate(adminId, {
+        balance: parseFloat(adminWallet.balance) - parseFloat(amount),
+        lastTransaction: { type: 'DEBIT', amount }
+      });
 
-    emitWalletUpdate(userId, {
-      balance: userWallet.balance + parseFloat(amount),
-      lastTransaction: { type: 'CREDIT', amount }
-    });
+      emitWalletUpdate(userId, {
+        balance: parseFloat(userWallet.balance) + parseFloat(amount),
+        lastTransaction: { type: 'CREDIT', amount }
+      });
 
-    emitNotification(userId, {
-      title: 'Wallet Credit',
-      message: `₹${amount} credited by admin`,
-      type: 'wallet_credit'
-    });
+      emitNotification(userId, {
+        title: 'Wallet Credit',
+        message: `₹${amount} credited by admin`,
+        type: 'wallet_credit'
+      });
+    }
 
     res.json({
       success: true,
-      message: 'Funds transferred successfully',
+      message: isSelfTransfer ? 'Funds added to your account successfully' : 'Funds transferred successfully',
       data: {
-        adminBalance: parseFloat(adminWallet.balance) - parseFloat(amount),
-        userBalance: parseFloat(userWallet.balance) + parseFloat(amount),
-        transferAmount: parseFloat(amount)
+        adminBalance: isSelfTransfer 
+          ? parseFloat(adminWallet.balance) + parseFloat(amount)
+          : parseFloat(adminWallet.balance) - parseFloat(amount),
+        userBalance: isSelfTransfer 
+          ? parseFloat(adminWallet.balance) + parseFloat(amount)
+          : parseFloat(userWallet.balance) + parseFloat(amount),
+        transferAmount: parseFloat(amount),
+        isSelfTransfer
       }
     });
 
   } catch (error) {
     await transaction.rollback();
     console.error('Admin transfer funds error:', error);
-    res.status(500).json({ error: 'Failed to transfer funds' });
+    res.status(500).json({ error: 'Unable to transfer funds. Please try again' });
   }
 };

@@ -8,6 +8,7 @@ import { logger } from '../../../utils/logger.js';
 import { MT5_CONFIG, ORDER_TYPES, SL_TYPES, TP_TYPES } from '../config/metaapi.config.js';
 import { connectionManager } from './ConnectionManager.js';
 import { CalculationService } from './CalculationService.js';
+import { marketDataService } from './MarketDataService.js';
 
 class TradeService {
   constructor() {
@@ -49,16 +50,18 @@ class TradeService {
       // Validate and normalize parameters
       const normalizedParams = this.validateAndNormalizeParams(tradeParams);
 
-      logger.info(`[TRADE] Placing ${normalizedParams.type} order for ${normalizedParams.symbol}`);
+      // Resolve the actual broker symbol (XAUUSD -> GOLD, etc.)
+      const brokerSymbol = await this.resolveBrokerSymbol(normalizedParams.symbol);
+      logger.info(`[TRADE] Placing ${normalizedParams.type} order for ${normalizedParams.symbol} (broker symbol: ${brokerSymbol})`);
       logger.debug(`[TRADE] Volume: ${normalizedParams.volume}, SL: ${normalizedParams.stopLoss}, TP: ${normalizedParams.takeProfit}`);
 
       // Get connection
       const connection = connectionManager.getConnection();
 
-      // Get current price if not provided
+      // Get current price if not provided (use resolved broker symbol)
       let currentPrice = normalizedParams.currentPrice;
       if (!currentPrice) {
-        const priceData = await connection.getSymbolPrice(normalizedParams.symbol);
+        const priceData = await connection.getSymbolPrice(brokerSymbol);
         currentPrice = normalizedParams.type === 'BUY' ? priceData.ask : priceData.bid;
         logger.debug(`[TRADE] Current price fetched: ${currentPrice}`);
       }
@@ -68,8 +71,8 @@ class TradeService {
         ? (normalizedParams.type === 'BUY' ? ORDER_TYPES.BUY : ORDER_TYPES.SELL)
         : (normalizedParams.type === 'BUY' ? ORDER_TYPES.BUY_LIMIT : ORDER_TYPES.SELL_LIMIT);
 
-      // Get symbol specs for calculations
-      const symbol = await this.getSymbolSpecs(normalizedParams.symbol);
+      // Get symbol specs for calculations (use resolved broker symbol)
+      const symbol = await this.getSymbolSpecs(brokerSymbol);
       logger.info(`[TRADE] Symbol specs: ${JSON.stringify(symbol)}`);
 
       // Calculate SL and TP in absolute price
@@ -93,7 +96,7 @@ class TradeService {
 
       // Create order object for MetaAPI
       const order = {
-        symbol: normalizedParams.symbol,
+        symbol: brokerSymbol,
         orderType: orderType,
         volume: normalizedParams.volume,
         openPrice: normalizedParams.entryPrice || undefined,
@@ -113,12 +116,12 @@ class TradeService {
       
       if (normalizedParams.type === 'BUY') {
         createOrderResult = await connection.createMarketBuyOrder(
-          normalizedParams.symbol,
+          brokerSymbol,
           normalizedParams.volume
         );
       } else {
         createOrderResult = await connection.createMarketSellOrder(
-          normalizedParams.symbol,
+          brokerSymbol,
           normalizedParams.volume
         );
       }
@@ -133,6 +136,16 @@ class TradeService {
       // Extract order ID (can be numeric or string)
       const orderId = createOrderResult.orderId || createOrderResult.stringCode || createOrderResult.numericCode;
 
+      // Determine trade status based on response
+      // TRADE_RETCODE_DONE (10009) means order was executed successfully
+      // If we have an orderId/positionId, the trade is FILLED (position is open)
+      const isOrderFilled = 
+        createOrderResult.stringCode === 'TRADE_RETCODE_DONE' ||
+        createOrderResult.numericCode === 10009 ||
+        (createOrderResult.orderId && createOrderResult.positionId);
+      
+      const tradeStatus = isOrderFilled ? 'FILLED' : (createOrderResult.state || 'PENDING');
+
       // Build response
       const tradeResult = {
         success: true,
@@ -145,7 +158,7 @@ class TradeService {
         currentPrice: currentPrice,
         stopLoss: slPrice,
         takeProfit: tpPrice,
-        status: createOrderResult.state || 'PENDING',
+        status: tradeStatus,
         executionTime: executionTime,
         timestamp: new Date().toISOString(),
         brokerResponse: {
@@ -459,6 +472,56 @@ class TradeService {
         lotStep: 0.01,
       };
     }
+  }
+
+  /**
+   * Resolve the actual broker symbol for a given standard symbol
+   * Different brokers use different naming conventions (XAUUSD vs GOLD, etc.)
+   * @param {string} symbol - Standard symbol name (e.g., XAUUSD)
+   * @returns {Promise<string>} Resolved broker symbol
+   */
+  async resolveBrokerSymbol(symbol) {
+    const connection = connectionManager.getConnection();
+    const upperSymbol = symbol.toUpperCase();
+    
+    // Check if MarketDataService has already resolved this symbol
+    if (marketDataService.resolvedSymbols && marketDataService.resolvedSymbols.has(upperSymbol)) {
+      const resolvedSymbol = marketDataService.resolvedSymbols.get(upperSymbol);
+      logger.debug(`[TRADE] Using cached resolved symbol: ${upperSymbol} -> ${resolvedSymbol}`);
+      return resolvedSymbol;
+    }
+    
+    // Symbol variants to try (different brokers use different naming)
+    const variants = {
+      'XAUUSD': ['XAUUSD', 'GOLD', 'XAUUSDm', 'XAUUSD.', 'XAUUSD.r', 'GOLDm', 'GOLD.', 'XAUUSD_o'],
+      'XAGUSD': ['XAGUSD', 'SILVER', 'XAGUSDm', 'XAGUSD.', 'XAGUSD.r', 'SILVERm', 'SILVER.', 'XAGUSD_o'],
+      'BTCUSD': ['BTCUSD', 'BTCUSDm', 'BTCUSD.', 'BITCOIN', 'BTC/USD', 'BTCUSD_o'],
+      'ETHUSD': ['ETHUSD', 'ETHUSDm', 'ETHUSD.', 'ETHEREUM', 'ETH/USD', 'ETHUSD_o'],
+    };
+    
+    const symbolVariants = variants[upperSymbol] || [symbol];
+    
+    // Try each variant until one works
+    for (const variant of symbolVariants) {
+      try {
+        logger.debug(`[TRADE] Trying symbol variant: ${variant}`);
+        const price = await connection.getSymbolPrice(variant);
+        if (price && (price.bid || price.ask)) {
+          // Cache the resolved symbol in MarketDataService
+          if (marketDataService.resolvedSymbols) {
+            marketDataService.resolvedSymbols.set(upperSymbol, variant);
+          }
+          logger.info(`[TRADE] Symbol ${upperSymbol} resolved to broker symbol: ${variant}`);
+          return variant;
+        }
+      } catch (err) {
+        // Continue to next variant
+        logger.debug(`[TRADE] Symbol variant ${variant} failed: ${err.message}`);
+      }
+    }
+    
+    // If no variant worked, throw error with helpful message
+    throw new Error(`Could not resolve broker symbol for ${symbol}. Tried variants: ${symbolVariants.join(', ')}`);
   }
 
   /**

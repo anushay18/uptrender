@@ -123,7 +123,7 @@ export const createStrategyValidation = [
     .isInt({ min: 1, max: 10 }).withMessage('Legs must be between 1-10'),
   body('lots')
     .optional()
-    .isInt({ min: 1, max: 1000 }).withMessage('Lots must be between 1-1000'),
+    .isFloat({ min: 0.01, max: 1000 }).withMessage('Lots must be between 0.01-1000'),
   body('expiryDate')
     .optional()
     .isISO8601().withMessage('Invalid expiry date format'),
@@ -168,7 +168,7 @@ export const updateStrategyValidation = [
     .isInt({ min: 1, max: 10 }).withMessage('Legs must be between 1-10'),
   body('lots')
     .optional()
-    .isInt({ min: 1, max: 1000 }).withMessage('Lots must be between 1-1000'),
+    .isFloat({ min: 0.01, max: 1000 }).withMessage('Lots must be between 0.01-1000'),
   body('expiryDate')
     .optional()
     .isISO8601().withMessage('Invalid expiry date format'),
@@ -200,7 +200,7 @@ export const subscribeToStrategyValidation = [
     .isInt({ min: 1 }).withMessage('Strategy ID must be a valid positive integer'),
   body('lots')
     .optional()
-    .isInt({ min: 1, max: 1000 }).withMessage('Lots must be between 1-1000'),
+    .isFloat({ min: 0.01, max: 1000 }).withMessage('Lots must be between 0.01-1000'),
   validate
 ];
 
@@ -368,7 +368,7 @@ export const paginationValidation = [
   query('limit')
     .optional()
     .toInt()
-    .isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1-100'),
+    .isInt({ min: 1, max: 1000 }).withMessage('Limit must be between 1-1000'),
   validate
 ];
 
@@ -401,6 +401,102 @@ export const adminTransferValidation = [
   validate
 ];
 
+// Paper Position Validations
+export const openPaperPositionValidation = [
+  body('symbol')
+    .trim()
+    .notEmpty().withMessage('Symbol is required')
+    .isString().withMessage('Symbol must be a string')
+    .isLength({ max: 50 }).withMessage('Symbol too long'),
+  body('type')
+    .isIn(['Buy', 'Sell', 'BUY', 'SELL']).withMessage('Type must be Buy or Sell'),
+  body('volume')
+    .isFloat({ min: 0.00000001, max: 10000 }).withMessage('Volume must be between 0.00000001 and 10000'),
+  body('price')
+    .optional()
+    .isFloat({ min: 0.00000001 }).withMessage('Price must be a positive number'),
+  body('market')
+    .optional()
+    .isIn(['Forex', 'Crypto', 'Indian']).withMessage('Market must be Forex, Crypto, or Indian'),
+  body('stopLoss')
+    .optional()
+    .isFloat({ min: 0 }).withMessage('Stop loss must be a positive number'),
+  body('takeProfit')
+    .optional()
+    .isFloat({ min: 0 }).withMessage('Take profit must be a positive number'),
+  body('stopLossType')
+    .optional()
+    .isIn(['price', 'points', 'percentage']).withMessage('Invalid stop loss type'),
+  body('takeProfitType')
+    .optional()
+    .isIn(['price', 'points', 'percentage']).withMessage('Invalid take profit type'),
+  validate
+];
+
+export const modifyPositionValidation = [
+  param('orderId')
+    .notEmpty().withMessage('Order ID is required'),
+  body('stopLoss')
+    .optional()
+    .isFloat({ min: 0 }).withMessage('Stop loss must be a positive number or 0'),
+  body('takeProfit')
+    .optional()
+    .isFloat({ min: 0 }).withMessage('Take profit must be a positive number or 0'),
+  body('stopLossType')
+    .optional()
+    .isIn(['price', 'points', 'percentage']).withMessage('Invalid stop loss type'),
+  body('takeProfitType')
+    .optional()
+    .isIn(['price', 'points', 'percentage']).withMessage('Invalid take profit type'),
+  validate
+];
+
+// Webhook Validations
+export const webhookValidation = [
+  body('secret')
+    .trim()
+    .notEmpty().withMessage('Webhook secret is required')
+    .isString().withMessage('Secret must be a string')
+    .isLength({ min: 4, max: 100 }).withMessage('Invalid secret length'),
+  body('signal')
+    .optional()
+    .isIn(['BUY', 'SELL', 'Buy', 'Sell', 'CLOSE', 'Close']).withMessage('Invalid signal'),
+  body('action')
+    .optional()
+    .isIn(['BUY', 'SELL', 'Buy', 'Sell', 'CLOSE', 'Close']).withMessage('Invalid action'),
+  body('symbol')
+    .optional()
+    .isString().withMessage('Symbol must be a string')
+    .isLength({ max: 50 }).withMessage('Symbol too long'),
+  body('volume')
+    .optional()
+    .isFloat({ min: 0.00000001, max: 10000 }).withMessage('Volume must be valid'),
+  validate
+];
+
+// Input sanitization helper - removes dangerous characters
+export const sanitizeSearchQuery = (value) => {
+  if (!value) return value;
+  // Remove SQL injection patterns
+  return value.replace(/['"%;\\]/g, '');
+};
+
+// Search query validation with sanitization
+export const searchValidation = [
+  query('search')
+    .optional()
+    .isString().withMessage('Search must be a string')
+    .customSanitizer(sanitizeSearchQuery)
+    .isLength({ max: 100 }).withMessage('Search query too long'),
+  query('page')
+    .optional()
+    .isInt({ min: 1 }).withMessage('Page must be positive integer'),
+  query('limit')
+    .optional()
+    .isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
+  validate
+];
+
 export default {
   validate,
   registerValidation,
@@ -422,5 +518,10 @@ export default {
   paginationValidation,
   idParamValidation,
   userIdParamValidation,
-  adminTransferValidation
+  adminTransferValidation,
+  openPaperPositionValidation,
+  modifyPositionValidation,
+  webhookValidation,
+  searchValidation,
+  sanitizeSearchQuery
 };

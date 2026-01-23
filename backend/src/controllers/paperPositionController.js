@@ -7,6 +7,8 @@ import { paperTradingService } from '../services/PaperTradingService.js';
 import { PaperPosition, Strategy, Trade, ApiKey } from '../models/index.js';
 import { mt5Broker } from '../../algoengine/index.js';
 import { emitTradeUpdate } from '../config/socket.js';
+import { Op } from 'sequelize';
+import centralizedStreamingService from '../services/CentralizedStreamingService.js';
 
 /**
  * Get all open paper positions for the authenticated user
@@ -92,9 +94,9 @@ export const getStats = async (req, res) => {
 export const openPosition = async (req, res) => {
   try {
     const userId = req.user.id;
-    const {
+    let {
       symbol,
-      market = 'Forex',
+      market,
       type,
       volume,
       stopLoss,
@@ -112,6 +114,21 @@ export const openPosition = async (req, res) => {
       });
     }
 
+    // Auto-detect market if not provided
+    if (!market) {
+      const symbolUpper = symbol.toUpperCase();
+      if (symbolUpper.includes('BTC') || symbolUpper.includes('ETH') || 
+          symbolUpper.includes('XRP') || symbolUpper.includes('DOGE') || 
+          symbolUpper.includes('SOL') || symbolUpper.includes('USDT') ||
+          symbolUpper.includes('BUSD') || symbolUpper.includes('ADA') ||
+          symbolUpper.includes('DOT') || symbolUpper.includes('MATIC')) {
+        market = 'Crypto';
+      } else {
+        market = 'Forex'; // Default to Forex
+      }
+      console.log(`🔍 Auto-detected market for ${symbol}: ${market}`);
+    }
+
     if (!['BUY', 'SELL', 'Buy', 'Sell'].includes(type)) {
       return res.status(400).json({
         success: false,
@@ -119,34 +136,73 @@ export const openPosition = async (req, res) => {
       });
     }
 
-    // Get current price from MT5
+    // Get current price from streaming service or broker
     let currentPrice = 0;
+    let selectedApiKey = null;
     
-    try {
-      // Get any active MT5 API key
-      const apiKey = await ApiKey.findOne({
-        where: { 
-          segment: market,
-          broker: 'MT5',
-          isActive: true
-        }
-      });
+    // PRIORITY 1: Try centralized streaming service first (most reliable)
+    const centralPrice = centralizedStreamingService.getPrice(symbol.toUpperCase());
+    if (centralPrice) {
+      currentPrice = type.toUpperCase() === 'BUY' ? centralPrice.ask : centralPrice.bid;
+      if (!currentPrice) currentPrice = centralPrice.last || centralPrice.mid;
+      console.log(`✅ [Centralized Streaming] Price for ${symbol}: ${currentPrice}`);
+    }
+    
+    // PRIORITY 2: Get from broker API if streaming unavailable
+    if (currentPrice <= 0) {
+      try {
+        // Get active API key based on market
+        const apiKey = await ApiKey.findOne({
+          where: { 
+            userId,
+            segment: market,
+            broker: market === 'Crypto' ? { [Op.ne]: 'MT5' } : 'MT5',
+            isActive: true
+          }
+        });
       
-      if (apiKey && apiKey.accessToken && apiKey.appName) {
-        const isConnected = await mt5Broker.healthCheck().catch(() => false);
-        if (!isConnected) {
-          await mt5Broker.initialize({
-            apiKey: apiKey.accessToken,
-            accountId: apiKey.appName
-          });
+        if (apiKey) {
+          selectedApiKey = apiKey;
+        
+          if (currentPrice <= 0 && market === 'Crypto' && apiKey.exchangeId && apiKey.apiKey && apiKey.apiSecret) {
+            // Use CCXT for crypto
+            try {
+              const ccxt = await import('ccxt');
+              const ExchangeClass = ccxt.default[apiKey.exchangeId];
+              if (ExchangeClass) {
+                const exchange = new ExchangeClass({
+                  apiKey: apiKey.apiKey,
+                  secret: apiKey.apiSecret,
+                  enableRateLimit: true
+                });
+                const ticker = await exchange.fetchTicker(symbol);
+                currentPrice = type.toUpperCase() === 'BUY' ? ticker.ask : ticker.bid;
+                console.log(`✅ [CCXT ${apiKey.exchangeId}] Price for ${symbol}: ${currentPrice}`);
+              }
+            } catch (ccxtError) {
+              console.warn('CCXT price fetch failed:', ccxtError.message);
+            }
+          }
+        
+          if (currentPrice <= 0 && apiKey.accessToken && apiKey.appName) {
+            // Use MT5 for Forex/Indian or fallback
+            const isConnected = await mt5Broker.healthCheck().catch(() => false);
+            if (!isConnected) {
+              await mt5Broker.initialize({
+                apiKey: apiKey.accessToken,
+                accountId: apiKey.appName
+              });
+            }
+            const priceData = await mt5Broker.getPrice(symbol.toUpperCase());
+            if (priceData && priceData.bid) {
+              currentPrice = type.toUpperCase() === 'BUY' ? priceData.ask : priceData.bid;
+              console.log(`✅ [MT5] Price for ${symbol}: ${currentPrice}`);
+            }
+          }
         }
-        const priceData = await mt5Broker.getPrice(symbol.toUpperCase());
-        if (priceData && priceData.bid) {
-          currentPrice = type.toUpperCase() === 'BUY' ? priceData.ask : priceData.bid;
-        }
+      } catch (priceError) {
+        console.warn('Could not fetch live price:', priceError.message);
       }
-    } catch (priceError) {
-      console.warn('Could not fetch live price:', priceError.message);
     }
 
     if (currentPrice <= 0) {
@@ -160,6 +216,7 @@ export const openPosition = async (req, res) => {
     const result = await paperTradingService.openPosition({
       userId,
       strategyId,
+      apiKeyId: selectedApiKey?.id || null,
       symbol: symbol.toUpperCase(),
       market,
       type: type.charAt(0).toUpperCase() + type.slice(1).toLowerCase(),
@@ -171,7 +228,9 @@ export const openPosition = async (req, res) => {
       takeProfitValue: takeProfit || 0,
       metadata: {
         source: 'Manual Paper Trade',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        broker: selectedApiKey?.broker || 'Unknown',
+        exchangeId: selectedApiKey?.exchangeId || null
       }
     });
 

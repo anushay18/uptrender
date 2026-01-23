@@ -6,6 +6,7 @@ import {
   Wallet,
   SupportTicket,
   Notification,
+  PaperPosition,
   sequelize,
 } from '../models/index.js';
 import { Op } from 'sequelize';
@@ -17,6 +18,11 @@ import { Op } from 'sequelize';
 export const getUserDashboard = async (req, res) => {
   try {
     const userId = req.user.id;
+
+    // Get today's date range (start of day to now)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayFilter = { [Op.gte]: today };
 
     // Get counts
     const tradesCount = await Trade.count({ where: { userId } });
@@ -42,13 +48,32 @@ export const getUserDashboard = async (req, res) => {
       order: [['createdAt', 'DESC']],
     });
 
-    // Get trade statistics
+    // Get trade statistics from both trades and paper positions (TODAY ONLY)
     const tradeStats = await Trade.findAll({
-      where: { userId },
+      where: { 
+        userId, 
+        broker: { [Op.ne]: 'PAPER' },
+        createdAt: todayFilter
+      },
       attributes: [
         'status',
         [sequelize.fn('COUNT', sequelize.col('id')), 'count'],
         [sequelize.fn('SUM', sequelize.col('pnl')), 'totalPL'],
+      ],
+      group: ['status'],
+      raw: true,
+    });
+
+    // Get paper position statistics (TODAY ONLY)
+    const paperStats = await PaperPosition.findAll({
+      where: { 
+        userId,
+        createdAt: todayFilter
+      },
+      attributes: [
+        'status',
+        [sequelize.fn('COUNT', sequelize.col('id')), 'count'],
+        [sequelize.fn('SUM', sequelize.col('realizedProfit')), 'totalPL'],
       ],
       group: ['status'],
       raw: true,
@@ -90,17 +115,37 @@ export const getUserDashboard = async (req, res) => {
             }
           : null,
         recentTrades,
-        tradeStats: tradeStats.reduce((acc, stat) => {
-          acc[stat.status.toLowerCase()] = {
-            count: parseInt(stat.count, 10) || 0,
-            totalPL: parseFloat(stat.totalPL) || 0,
-          };
-          return acc;
-        }, {}),
+        tradeStats: (() => {
+          // Combine trade stats and paper stats
+          const combined = {};
+          
+          // Process live trade stats
+          tradeStats.forEach(stat => {
+            const key = stat.status.toLowerCase();
+            combined[key] = {
+              count: parseInt(stat.count, 10) || 0,
+              totalPL: parseFloat(stat.totalPL) || 0,
+            };
+          });
+          
+          // Process paper position stats (map Closed->completed, Open->open)
+          paperStats.forEach(stat => {
+            const originalKey = stat.status;
+            const key = originalKey === 'Closed' ? 'completed' : originalKey.toLowerCase();
+            
+            if (!combined[key]) {
+              combined[key] = { count: 0, totalPL: 0 };
+            }
+            combined[key].count += parseInt(stat.count, 10) || 0;
+            combined[key].totalPL += parseFloat(stat.totalPL) || 0;
+          });
+          
+          return combined;
+        })(),
       },
     });
   } catch (error) {
     console.error('Get user dashboard error:', error);
-    res.status(500).json({ error: 'Failed to fetch dashboard data' });
+    res.status(500).json({ error: 'Unable to load dashboard. Please refresh the page' });
   }
 };

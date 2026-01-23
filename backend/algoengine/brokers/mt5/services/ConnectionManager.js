@@ -182,7 +182,13 @@ class MT5ConnectionManager {
     this.keepAliveTimer = setInterval(async () => {
       try {
         if (this.connection) {
-          await this.connection.refreshTerminalState();
+          // Use getAccountInformation() for keep-alive as refreshTerminalState may not exist on RPC connections
+          if (typeof this.connection.getAccountInformation === 'function') {
+            await this.connection.getAccountInformation();
+          } else if (typeof this.connection.refreshTerminalState === 'function') {
+            await this.connection.refreshTerminalState();
+          }
+          // If neither method exists, just check if connection is alive
         }
       } catch (error) {
         logger.warn(`Keep-alive ping failed: ${error.message}`);

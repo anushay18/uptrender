@@ -27,6 +27,8 @@ import PaymentGatewaySettings from './PaymentGatewaySettings.js';
 import PlatformSettings from './PlatformSettings.js';
 import PaperPosition from './PaperPosition.js';
 import UserFavorite from './UserFavorite.js';
+import SignalLog from './SignalLog.js';
+import DataStreamingSettings from './DataStreamingSettings.js';
 
 // ========== User Associations ==========
 User.hasMany(Trade, { foreignKey: 'userId', as: 'trades', onDelete: 'CASCADE' });
@@ -68,6 +70,14 @@ SupportMessage.belongsTo(User, { foreignKey: 'authorId', as: 'author' });
 // ========== Trade-Strategy Associations ==========
 Strategy.hasMany(Trade, { foreignKey: 'strategyId', as: 'trades', onDelete: 'SET NULL' });
 Trade.belongsTo(Strategy, { foreignKey: 'strategyId', as: 'strategy' });
+
+// ========== Trade-ApiKey Associations (for Parent-Child architecture) ==========
+ApiKey.hasMany(Trade, { foreignKey: 'apiKeyId', as: 'trades', onDelete: 'SET NULL' });
+Trade.belongsTo(ApiKey, { foreignKey: 'apiKeyId', as: 'apiKey' });
+
+// ========== Trade Parent-Child Self-Reference ==========
+Trade.hasMany(Trade, { foreignKey: 'parentTradeId', as: 'childTrades', onDelete: 'SET NULL' });
+Trade.belongsTo(Trade, { foreignKey: 'parentTradeId', as: 'parentTrade' });
 
 // ========== Plan Associations ==========
 // REMOVED: Plans table does not have planId foreign key to PlansCatalog in database
@@ -126,12 +136,18 @@ User.hasMany(PaperPosition, { foreignKey: 'userId', as: 'paperPositions', onDele
 PaperPosition.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 Strategy.hasMany(PaperPosition, { foreignKey: 'strategyId', as: 'paperPositions', onDelete: 'SET NULL' });
 PaperPosition.belongsTo(Strategy, { foreignKey: 'strategyId', as: 'strategy' });
+ApiKey.hasMany(PaperPosition, { foreignKey: 'apiKeyId', as: 'paperPositions', onDelete: 'SET NULL' });
+PaperPosition.belongsTo(ApiKey, { foreignKey: 'apiKeyId', as: 'apiKey' });
 
 // ========== User Favorites Associations ==========
 User.hasMany(UserFavorite, { foreignKey: 'userId', as: 'favorites', onDelete: 'CASCADE' });
 UserFavorite.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 Strategy.hasMany(UserFavorite, { foreignKey: 'strategyId', as: 'favoritedBy', onDelete: 'CASCADE' });
 UserFavorite.belongsTo(Strategy, { foreignKey: 'strategyId', as: 'strategy' });
+
+// ========== Signal Log Associations ==========
+Strategy.hasMany(SignalLog, { foreignKey: 'strategyId', as: 'signalLogs', onDelete: 'CASCADE' });
+SignalLog.belongsTo(Strategy, { foreignKey: 'strategyId', as: 'strategy' });
 
 export {
   sequelize,
@@ -160,5 +176,7 @@ export {
   PaymentGatewaySettings,
   PlatformSettings,
   PaperPosition,
-  UserFavorite
+  UserFavorite,
+  SignalLog,
+  DataStreamingSettings
 };

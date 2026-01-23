@@ -1,5 +1,7 @@
 import { Trade, User, sequelize } from '../models/index.js';
 import { Op } from 'sequelize';
+import centralizedStreamingService from '../services/CentralizedStreamingService.js';
+import { calculatePnL } from '../utils/tradingCalculations.js';
 
 // Get all trades (Admin)
 export const getAllTrades = async (req, res) => {
@@ -12,6 +14,8 @@ export const getAllTrades = async (req, res) => {
       market,
       type,
       broker,
+      startDate,
+      endDate,
       sort = '-createdAt' 
     } = req.query;
 
@@ -42,6 +46,19 @@ export const getAllTrades = async (req, res) => {
       where.broker = broker;
     }
 
+    // Date range filter
+    if (startDate || endDate) {
+      where.createdAt = {};
+      if (startDate) {
+        where.createdAt[Op.gte] = new Date(startDate);
+      }
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        where.createdAt[Op.lte] = end;
+      }
+    }
+
     // Sorting
     const order = [];
     if (sort.startsWith('-')) {
@@ -64,10 +81,83 @@ export const getAllTrades = async (req, res) => {
       }]
     });
 
+    // Return trades with their stored P&L values
+    // For open trades, calculate using current prices
+    // For completed trades, use the stored pnl from database
+    const tradesWithPnL = trades.rows.map(trade => {
+      const tradeData = trade.toJSON();
+      
+      console.log(`[Admin P&L] Trade #${tradeData.id}: symbol=${tradeData.symbol}, status=${tradeData.status}, price=${tradeData.price}, amount=${tradeData.amount}, storedPnl=${tradeData.pnl}`);
+      
+      if (tradeData.status === 'Open') {
+        // For open trades, calculate real-time P&L using streaming prices
+        const priceData = centralizedStreamingService.getPrice(tradeData.symbol?.toUpperCase());
+        console.log(`[Admin P&L] Trade #${tradeData.id}: priceData=`, priceData ? `bid=${priceData.bid}, ask=${priceData.ask}` : 'null');
+        
+        let currentPrice = tradeData.currentPrice;
+        
+        if (priceData) {
+          // Use bid for sells, ask for buys (closing price)
+          currentPrice = tradeData.type === 'Sell' ? priceData.ask : priceData.bid;
+        }
+        
+        if (currentPrice && tradeData.price && tradeData.amount) {
+          const pnlResult = calculatePnL({
+            openPrice: parseFloat(tradeData.price),
+            currentPrice: parseFloat(currentPrice),
+            volume: parseFloat(tradeData.amount),
+            type: tradeData.type,
+            symbol: tradeData.symbol,
+            market: tradeData.market || 'Forex'
+          });
+          
+          console.log(`[Admin P&L] Trade #${tradeData.id}: Calculated pnl=${pnlResult.profit}`);
+          
+          tradeData.pnl = pnlResult.profit.toFixed(2);
+          tradeData.pnlPercentage = pnlResult.profitPercent.toFixed(2);
+          tradeData.currentPrice = parseFloat(currentPrice).toFixed(8);
+        } else {
+          console.log(`[Admin P&L] Trade #${tradeData.id}: Missing data - currentPrice=${currentPrice}, price=${tradeData.price}, amount=${tradeData.amount}`);
+          tradeData.pnl = '0.00';
+          tradeData.pnlPercentage = '0.00';
+        }
+      } else {
+        // For completed/closed trades, use the stored pnl from database
+        // If pnl is not stored, calculate from entry and exit prices
+        if (tradeData.pnl !== null && tradeData.pnl !== undefined) {
+          // Use stored P&L
+          tradeData.pnl = parseFloat(tradeData.pnl).toFixed(2);
+          tradeData.pnlPercentage = tradeData.pnlPercentage ? parseFloat(tradeData.pnlPercentage).toFixed(2) : '0.00';
+        } else if (tradeData.currentPrice && tradeData.price && tradeData.amount) {
+          // Calculate P&L from entry price and exit price (currentPrice)
+          const entryPrice = parseFloat(tradeData.price);
+          const exitPrice = parseFloat(tradeData.currentPrice);
+          const quantity = parseFloat(tradeData.amount);
+          
+          let pnl = 0;
+          if (tradeData.type === 'Buy') {
+            pnl = (exitPrice - entryPrice) * quantity;
+          } else {
+            pnl = (entryPrice - exitPrice) * quantity;
+          }
+          
+          const pnlPercentage = entryPrice > 0 ? ((pnl / (entryPrice * quantity)) * 100) : 0;
+          
+          tradeData.pnl = pnl.toFixed(2);
+          tradeData.pnlPercentage = pnlPercentage.toFixed(2);
+        } else {
+          tradeData.pnl = '0.00';
+          tradeData.pnlPercentage = '0.00';
+        }
+      }
+      
+      return tradeData;
+    });
+
     res.json({
       success: true,
       data: {
-        trades: trades.rows,
+        trades: tradesWithPnL,
         total: trades.count,
         page: parseInt(page),
         pages: Math.ceil(trades.count / limit),

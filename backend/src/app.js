@@ -41,6 +41,11 @@ import algoTradeRoutes from './routes/algoTradeRoutes.js';
 import paymentRoutes from './routes/paymentRoutes.js';
 import paperPositionRoutes from './routes/paperPositionRoutes.js';
 import exchangeRoutes from './routes/exchangeRoutes.js';
+import positionRoutes from './routes/positionRoutes.js';
+import signalLogRoutes from './routes/signalLogRoutes.js';
+import metaapiRoutes from './routes/metaapi.routes.js';
+import dataStreamingRoutes from './routes/dataStreamingRoutes.js';
+import { executeParentChildTrade } from './controllers/parentChildTradeController.js';
 
 const app = express();
 
@@ -96,7 +101,11 @@ app.use(cors({
       'https://uptrender.in',     // Root domain with SSL
       'http://uptrender.in',      // Root domain without SSL
       'https://dev.uptrender.in', // Dev domain with SSL
-      'http://dev.uptrender.in'   // Dev domain without SSL
+      'http://dev.uptrender.in',  // Dev domain without SSL
+      'https://app.virtualbees.ai', // VirtualBees domain with SSL
+      'http://app.virtualbees.ai',  // VirtualBees domain without SSL
+      'https://virtualbees.ai',     // VirtualBees root domain with SSL
+      'http://virtualbees.ai'       // VirtualBees root domain without SSL
     ];
 
     // Add CORS_ORIGIN from environment (can be comma-separated)
@@ -117,8 +126,20 @@ app.use(cors({
     return callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'x-request-id']
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization', 
+    'X-Requested-With', 
+    'x-request-id',
+    'X-Request-Id',
+    'Accept',
+    'Origin',
+    'Cache-Control',
+    'X-File-Name'
+  ],
+  exposedHeaders: ['Content-Range', 'X-Content-Range', 'X-Total-Count'],
+  maxAge: 86400 // 24 hours
 }));
 app.use(morgan('combined')); // Logging
 app.use(limiter); // Rate limiting
@@ -174,6 +195,14 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/platform-settings', platformSettingsRoutes);
 app.use('/api/paper-positions', paperPositionRoutes);
 app.use('/api/exchanges', exchangeRoutes);
+app.use('/api/positions', positionRoutes);
+app.use('/api/signal-logs', signalLogRoutes);
+app.use('/api/metaapi', metaapiRoutes);
+app.use('/api/data-streaming', dataStreamingRoutes);
+
+// Parent-Child Trade Webhook (alternative endpoint)
+app.post('/api/webhook/trade', executeParentChildTrade);
+
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/dashboard/admin', adminDashboardRoutes);
 app.use('/api/dashboard/user', userDashboardRoutes);

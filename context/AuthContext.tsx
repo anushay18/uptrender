@@ -71,6 +71,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
       
       if (response.success && response.user) {
         setUser(response.user);
+        // Connect WebSocket immediately after login so real-time updates start without refresh
+        wsService.connect();
         return { success: true };
       }
       
@@ -89,6 +91,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
       
       if (response.success && response.user) {
         setUser(response.user);
+        // Connect WebSocket after registration as well
+        wsService.connect();
         return { success: true };
       }
       

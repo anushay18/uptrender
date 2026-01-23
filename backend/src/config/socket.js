@@ -1,7 +1,7 @@
-import { Server } from 'socket.io';
-import { verifyToken } from '../utils/jwt.js';
-import { User } from '../models/index.js';
 import process from 'process';
+import { Server } from 'socket.io';
+import { User } from '../models/index.js';
+import { verifyToken } from '../utils/jwt.js';
 import redisClient from '../utils/redisClient.js';
 
 let io;
@@ -10,23 +10,60 @@ let io;
 export const initializeSocketIO = (server) => {
   io = new Server(server, {
     cors: {
-      origin: [
-        'http://localhost:5173',
-        'http://127.0.0.1:5173',
-        'http://192.168.1.8:5173',
-        'http://localhost:3000',
-        process.env.CORS_ORIGIN
-      ].filter(Boolean),
+      // Allow all origins for mobile app support (React Native doesn't send origin header)
+      // For web, specific origins are checked
+      origin: (origin, callback) => {
+        const allowedOrigins = [
+          'http://localhost:5173',
+          'http://127.0.0.1:5173',
+          'http://192.168.1.8:5173',
+          'http://localhost:3000',
+          'https://app.uptrender.in',
+          'http://app.uptrender.in',
+          'https://app.virtualbees.ai',
+          'http://app.virtualbees.ai',
+          process.env.CORS_ORIGIN
+        ].filter(Boolean);
+        
+        // Allow requests with no origin (mobile apps, Postman, etc.)
+        if (!origin) {
+          return callback(null, true);
+        }
+        
+        if (allowedOrigins.includes(origin)) {
+          return callback(null, true);
+        }
+        
+        // For development, allow all localhost variants
+        if (origin.includes('localhost') || origin.includes('127.0.0.1') || origin.includes('192.168.')) {
+          return callback(null, true);
+        }
+        
+        callback(new Error('CORS not allowed'), false);
+      },
       credentials: true,
       methods: ['GET', 'POST']
     },
     pingTimeout: 60000,
-    pingInterval: 25000
+    pingInterval: 25000,
+    // Allow transport upgrade
+    allowUpgrades: true,
+    // Increase buffer size for mobile
+    maxHttpBufferSize: 1e6
   });
 
   // Authentication middleware
   io.use(async (socket, next) => {
     try {
+      // Log handshake details for debugging auth issues
+      try {
+        console.log('🔌 [Socket] Handshake auth keys:', Object.keys(socket.handshake.auth || {}));
+        console.log('🔌 [Socket] Handshake auth token length:', socket.handshake.auth.token ? socket.handshake.auth.token.length : 'none');
+        console.log('🔌 [Socket] Handshake headers present:', !!socket.handshake.headers && Object.keys(socket.handshake.headers).length);
+      } catch (e) {
+        console.warn('🔌 [Socket] Failed to log handshake debug info', e);
+      }
+
       const token = socket.handshake.auth.token || socket.handshake.headers.authorization?.split(' ')[1];
       
       if (!token) {
@@ -51,7 +88,8 @@ export const initializeSocketIO = (server) => {
       next();
     } catch (error) {
       console.error('Socket authentication error:', error);
-      next(new Error('Invalid token'));
+      // Forward the actual error message to the client for debugging (will be visible in connect_error.data)
+      next(new Error(error.message || 'Invalid token'));
     }
   });
 
@@ -191,6 +229,15 @@ export const setupRedisForSocketIO = async () => {
       }
     });
 
+    // Subscribe to platform MT5 prices (shared connection)
+    await redisClient.subscriber.subscribe('platform:prices', (err) => {
+      if (err) {
+        console.error('❌ Failed to subscribe to platform:prices:', err);
+      } else {
+        console.log('✅ Subscribed to Redis channel: platform:prices');
+      }
+    });
+
     // Handle incoming messages
     redisClient.subscriber.on('message', (channel, message) => {
       try {
@@ -217,6 +264,14 @@ export const setupRedisForSocketIO = async () => {
               bid: data.bid,
               ask: data.ask,
               mid: data.mid,
+              timestamp: data.timestamp
+            });
+          }
+        } else if (channel === 'platform:prices') {
+          // Broadcast platform prices to all connected users
+          if (io && data.prices) {
+            io.to('paper:prices:all').emit('platform:prices', {
+              prices: data.prices,
               timestamp: data.timestamp
             });
           }
@@ -345,6 +400,43 @@ export const emitPaperPositionUpdate = (userId, position, action = 'update') => 
   console.log(`Emit paper position update to user ${userId} action=${action} id=${position?.id}`);
   emitToUser(userId, 'paper_position:update', {
     action, // 'open', 'close', 'modify', 'mtm', 'sl_hit', 'tp_hit'
+    position,
+    timestamp: new Date().toISOString()
+  });
+};
+
+// Emit broker-specific price update (Parent-Child architecture)
+export const emitBrokerPriceUpdate = (userId, apiKeyId, symbol, priceData) => {
+  emitToUser(userId, 'broker:price_update', {
+    apiKeyId,
+    symbol,
+    bid: priceData.bid,
+    ask: priceData.ask,
+    last: priceData.last,
+    timestamp: new Date().toISOString()
+  });
+};
+
+// Emit broker-specific MTM update for a position
+export const emitBrokerMtmUpdate = (userId, data) => {
+  emitToUser(userId, 'broker:mtm_update', {
+    tradeId: data.tradeId,
+    apiKeyId: data.apiKeyId,
+    broker: data.broker,
+    symbol: data.symbol,
+    currentPrice: data.currentPrice,
+    mtm: data.mtm,
+    entryPrice: data.entryPrice,
+    slTriggered: data.slTriggered,
+    tpTriggered: data.tpTriggered,
+    timestamp: new Date().toISOString()
+  });
+};
+
+// Emit aggregated position update (Parent-Child architecture)
+export const emitPositionUpdate = (userId, position, action = 'update') => {
+  emitToUser(userId, 'position:update', {
+    action, // 'open', 'close', 'child_executed', 'mtm_update', 'sl_hit', 'tp_hit'
     position,
     timestamp: new Date().toISOString()
   });

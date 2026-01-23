@@ -5,7 +5,7 @@ import crypto from 'crypto';
 
 const User = sequelize.define('User', {
   id: {
-    type: DataTypes.INTEGER,
+    type: DataTypes.INTEGER.UNSIGNED,
     primaryKey: true,
     autoIncrement: true
   },
@@ -35,7 +35,7 @@ const User = sequelize.define('User', {
     allowNull: false
   },
   role: {
-    type: DataTypes.ENUM('admin', 'user'),
+    type: DataTypes.ENUM('admin', 'user', 'franchise'),
     defaultValue: 'user',
     allowNull: false
   },
@@ -43,6 +43,42 @@ const User = sequelize.define('User', {
     type: DataTypes.ENUM('Active', 'Inactive'),
     defaultValue: 'Active',
     allowNull: false
+  },
+  // Franchise fields
+  isFranchise: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+    comment: 'Whether this user is a franchise owner'
+  },
+  franchiseId: {
+    type: DataTypes.STRING(50),
+    allowNull: true,
+    comment: 'Unique franchise identifier'
+  },
+  parentFranchiseId: {
+    type: DataTypes.INTEGER.UNSIGNED,
+    allowNull: true,
+    comment: 'Parent franchise user ID for sub-franchises'
+  },
+  franchiseName: {
+    type: DataTypes.STRING(255),
+    allowNull: true,
+    comment: 'Display name for the franchise'
+  },
+  franchiseCommission: {
+    type: DataTypes.DECIMAL(5, 2),
+    allowNull: true,
+    comment: 'Commission percentage for franchise'
+  },
+  franchiseStatus: {
+    type: DataTypes.ENUM('Active', 'Inactive', 'Suspended'),
+    allowNull: true,
+    comment: 'Status of franchise account'
+  },
+  franchiseJoinedDate: {
+    type: DataTypes.DATEONLY,
+    allowNull: true,
+    comment: 'Date when user became a franchise'
   },
   currency: {
     type: DataTypes.STRING(10),
@@ -154,15 +190,52 @@ const User = sequelize.define('User', {
     type: DataTypes.STRING(500),
     allowNull: true
   },
+  googleId: {
+    type: DataTypes.STRING(255),
+    allowNull: true,
+    unique: true,
+    comment: 'Google OAuth user ID'
+  },
   webhookSecret: {
     type: DataTypes.STRING(6),
     allowNull: true,
     unique: true
   },
+  passwordChangedAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    comment: 'Timestamp when password was last changed'
+  },
   settings: {
     type: DataTypes.JSON,
     allowNull: true,
     defaultValue: {}
+  },
+  // Notification preferences
+  whatsappNumber: {
+    type: DataTypes.STRING(20),
+    allowNull: true,
+    comment: 'WhatsApp number for notifications'
+  },
+  telegramId: {
+    type: DataTypes.STRING(100),
+    allowNull: true,
+    comment: 'Telegram ID for notifications'
+  },
+  notifyTradingAlerts: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+    comment: 'Receive trading alerts notifications'
+  },
+  notifyTransactionAlerts: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+    comment: 'Receive transaction alerts notifications'
+  },
+  notifyGeneralNotifications: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+    comment: 'Receive general notifications'
   }
 }, {
   tableName: 'users',

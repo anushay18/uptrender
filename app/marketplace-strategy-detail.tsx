@@ -1,29 +1,145 @@
+import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
+import { strategyService, walletService } from '@/services';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Calendar, CheckCircle, CurrencyDollar, X } from 'phosphor-react-native';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
-    Modal,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function MarketplaceStrategyDetailScreen() {
   const router = useRouter();
-  const { id, name, author } = useLocalSearchParams<{ id: string; name: string; author: string }>();
+  const { id, name, author, isOwn, price: priceParam, segment: segmentParam, capital: capitalParam } = useLocalSearchParams<{ 
+    id: string; 
+    name: string; 
+    author: string; 
+    isOwn?: string;
+    price?: string;
+    segment?: string;
+    capital?: string;
+  }>();
   const { isDark } = useTheme();
+  const { user } = useAuth();
   const insets = useSafeAreaInsets();
-  const { openSubscribe } = useLocalSearchParams<{ id?: string; name?: string; author?: string; openSubscribe?: string }>();
+  const { openSubscribe } = useLocalSearchParams<{ id?: string; name?: string; author?: string; isOwn?: string; openSubscribe?: string }>();
   const [showSubscribeModal, setShowSubscribeModal] = useState(false);
+  
+  // Subscription state
+  const [isSubscribing, setIsSubscribing] = useState(false);
+  const [walletBalance, setWalletBalance] = useState<number>(0);
+  const [strategyData, setStrategyData] = useState<any>(null);
+  const [isLoadingStrategy, setIsLoadingStrategy] = useState(true);
 
   useEffect(() => {
     if (openSubscribe === 'true') setShowSubscribeModal(true);
   }, [openSubscribe]);
+
+  // Fetch strategy data and wallet balance
+  const fetchData = useCallback(async () => {
+    setIsLoadingStrategy(true);
+    try {
+      // For marketplace strategies (isOwn !== 'true'), we might not be able to fetch via getStrategyById
+      // So we'll rely on query params and try to fetch, but not fail if it returns 404
+      const [strategyRes, walletRes] = await Promise.all([
+        id ? strategyService.getStrategyById(parseInt(id)).catch(() => ({ success: false, data: null })) : Promise.resolve({ success: false, data: null }),
+        walletService.getWallet(),
+      ]);
+      
+      console.log('📊 [Marketplace Detail] Strategy Response:', JSON.stringify(strategyRes, null, 2));
+      console.log('📊 [Marketplace Detail] Query params - capital:', capitalParam);
+      
+      if (strategyRes.success && strategyRes.data) {
+        console.log('📊 [Marketplace Detail] Strategy Capital from API:', strategyRes.data.capital);
+        setStrategyData(strategyRes.data);
+      } else if (!strategyRes.success && isOwn !== 'true') {
+        // For marketplace strategies we may not have access to getStrategyById
+        // Create a minimal data object from query params
+        console.log('📊 [Marketplace Detail] Using query params for marketplace strategy');
+        setStrategyData({
+          name: decodeURIComponent(name || 'Strategy'),
+          segment: segmentParam,
+          price: parseFloat(priceParam || '0'),
+          capital: Number(capitalParam) || 0,
+        });
+      }
+      
+      if (walletRes.success && walletRes.data) {
+        // Wallet API may return data as an object or a numeric balance directly.
+        const raw = walletRes.data;
+        let bal = 0;
+        if (typeof raw === 'number') bal = raw;
+        else if (raw && typeof raw === 'object') bal = raw.balance ?? (raw as any).currentBalance ?? 0;
+        else bal = Number(raw) || 0;
+        setWalletBalance(Number(bal) || 0);
+      }
+    } catch (error) {
+      console.error('Failed to fetch strategy data:', error);
+    } finally {
+      setIsLoadingStrategy(false);
+    }
+  }, [id, name, priceParam, segmentParam, isOwn]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  // Get price and other details
+  const strategyPrice = strategyData?.price || parseFloat(priceParam || '0') || 0;
+  const strategyName = strategyData?.name || decodeURIComponent(name || 'Strategy');
+  const strategySegment = strategyData?.segment || segmentParam || 'Forex';
+  const expiryDate = new Date();
+  expiryDate.setDate(expiryDate.getDate() + 30);
+
+  // Handle subscribe
+  const handleSubscribe = async () => {
+    if (!id) {
+      Alert.alert('Error', 'Strategy ID is missing');
+      return;
+    }
+
+    // Check wallet balance
+    if (strategyPrice > 0 && walletBalance < strategyPrice) {
+      Alert.alert(
+        'Insufficient Balance',
+        `You need ₹${strategyPrice} to subscribe. Your current balance is ₹${walletBalance.toFixed(2)}. Please add funds to your wallet.`,
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    setIsSubscribing(true);
+    try {
+      const result = await strategyService.subscribe(parseInt(id), { lots: 1 });
+      
+      if (result.success) {
+        setShowSubscribeModal(false);
+        Alert.alert(
+          'Subscribed Successfully!',
+          strategyPrice > 0 
+            ? `₹${strategyPrice} has been deducted from your wallet. You now have access to "${strategyName}" until ${expiryDate.toLocaleDateString('en-IN')}.`
+            : `You now have access to "${strategyName}" until ${expiryDate.toLocaleDateString('en-IN')}.`,
+          [{ text: 'OK', onPress: () => router.back() }]
+        );
+      } else {
+        Alert.alert('Subscription Failed', result.error || 'Unable to subscribe. Please try again.');
+      }
+    } catch (error: any) {
+      console.error('Subscribe error:', error);
+      Alert.alert('Error', error.message || 'Something went wrong. Please try again.');
+    } finally {
+      setIsSubscribing(false);
+    }
+  };
 
   const theme = {
     bg: isDark ? '#050510' : '#F8FAFC',
@@ -41,7 +157,7 @@ export default function MarketplaceStrategyDetailScreen() {
       {/* Header */}
       <View style={[styles.header, { backgroundColor: theme.cardBg, borderBottomColor: theme.border }]}>
         <Text style={[styles.headerTitle, { color: theme.text }]}>
-          {decodeURIComponent(name || 'BTC TREND RIDER')}
+          {strategyName}
         </Text>
         <TouchableOpacity onPress={() => router.back()} style={styles.closeBtn}>
           <X size={24} color={theme.text} weight="bold" />
@@ -50,7 +166,18 @@ export default function MarketplaceStrategyDetailScreen() {
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         {/* Top Metrics Row */}
-        <View style={styles.metricsRow}>
+        <ScrollView 
+          horizontal 
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.metricsScrollContent}
+          style={styles.metricsScroll}
+        >
+          <View style={[styles.metricCard, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
+            <Text style={[styles.metricValue, { color: theme.text }]}>
+              ₹{Number(strategyData?.capital || capitalParam || 0).toLocaleString('en-IN')}
+            </Text>
+            <Text style={[styles.metricLabel, { color: theme.textSecondary }]}>Capital</Text>
+          </View>
           <View style={[styles.metricCard, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
             <Text style={[styles.metricValue, { color: theme.success }]}>0%</Text>
             <Text style={[styles.metricLabel, { color: theme.textSecondary }]}>Total Return</Text>
@@ -67,7 +194,7 @@ export default function MarketplaceStrategyDetailScreen() {
             <Text style={[styles.metricValue, { color: theme.success }]}>0%</Text>
             <Text style={[styles.metricLabel, { color: theme.textSecondary }]}>Win Rate</Text>
           </View>
-        </View>
+        </ScrollView>
 
         {/* Performance Metrics Section */}
         <View style={[styles.section, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
@@ -127,7 +254,7 @@ export default function MarketplaceStrategyDetailScreen() {
         </View>
 
         {/* Footer Buttons - Inside ScrollView on Android */}
-        {Platform.OS === 'android' && (
+        {Platform.OS === 'android' && isOwn !== 'true' && (
           <View style={[styles.footerInline, { backgroundColor: theme.bg, borderTopColor: theme.border }]}>
             <TouchableOpacity 
               style={[styles.closeButton, { borderColor: theme.primary }]}
@@ -148,7 +275,7 @@ export default function MarketplaceStrategyDetailScreen() {
       </ScrollView>
 
       {/* Footer Buttons - Fixed on iOS only */}
-      {Platform.OS === 'ios' && (
+      {Platform.OS === 'ios' && isOwn !== 'true' && (
         <View style={[styles.footer, { backgroundColor: theme.bg, borderTopColor: theme.border }]}>
           <TouchableOpacity 
             style={[styles.closeButton, { borderColor: theme.primary }]}
@@ -177,19 +304,21 @@ export default function MarketplaceStrategyDetailScreen() {
             <ScrollView showsVerticalScrollIndicator={false}>
               {/* Modal Header */}
               <Text style={[styles.modalTitle, { color: theme.text }]}>Confirm Subscription</Text>
-              <Text style={[styles.modalStrategyName, { color: theme.textSecondary }]}>BTC TREND RIDER</Text>
+              <Text style={[styles.modalStrategyName, { color: theme.textSecondary }]}>{strategyName}</Text>
               
               {/* Tags */}
               <View style={styles.modalTags}>
                 <View style={[styles.modalTag, { borderColor: theme.primary }]}>
-                  <Text style={[styles.modalTagText, { color: theme.primary }]}>Forex</Text>
+                  <Text style={[styles.modalTagText, { color: theme.primary }]}>{strategySegment}</Text>
                 </View>
                 <View style={[styles.modalTag, { borderColor: theme.primary }]}>
                   <Text style={[styles.modalTagText, { color: theme.primary }]}>Public</Text>
                 </View>
-                <View style={[styles.modalTag, { borderColor: theme.success }]}>
-                  <Text style={[styles.modalTagText, { color: theme.success }]}>+null%</Text>
-                </View>
+                {strategyData?.stats?.winRate !== undefined && (
+                  <View style={[styles.modalTag, { borderColor: theme.success }]}>
+                    <Text style={[styles.modalTagText, { color: theme.success }]}>+{strategyData.stats.winRate}%</Text>
+                  </View>
+                )}
               </View>
 
               {/* Subscription Details */}
@@ -200,7 +329,9 @@ export default function MarketplaceStrategyDetailScreen() {
                   <CurrencyDollar size={20} color={theme.textSecondary} weight="bold" />
                 </View>
                 <Text style={[styles.detailLabel, { color: theme.text }]}>Subscription Fee</Text>
-                <Text style={[styles.detailValue, { color: theme.success }]}>FREE</Text>
+                <Text style={[styles.detailValue, { color: strategyPrice > 0 ? theme.text : theme.success }]}>
+                  {strategyPrice > 0 ? `₹${strategyPrice}` : 'FREE'}
+                </Text>
               </View>
 
               <View style={styles.detailRow}>
@@ -216,8 +347,29 @@ export default function MarketplaceStrategyDetailScreen() {
                   <CheckCircle size={20} color={theme.textSecondary} weight="bold" />
                 </View>
                 <Text style={[styles.detailLabel, { color: theme.text }]}>Expires On</Text>
-                <Text style={[styles.detailValue, { color: theme.text }]}>02 Feb 2026</Text>
+                <Text style={[styles.detailValue, { color: theme.text }]}>{expiryDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</Text>
               </View>
+
+              {/* Wallet Balance Info */}
+              {strategyPrice > 0 && (
+                <View style={[styles.walletInfoBox, { 
+                  backgroundColor: walletBalance >= strategyPrice 
+                    ? (isDark ? 'rgba(16, 185, 129, 0.1)' : '#D1FAE5')
+                    : (isDark ? 'rgba(239, 68, 68, 0.1)' : '#FEE2E2')
+                }]}>
+                  <View style={styles.walletInfoRow}>
+                    <Text style={[styles.walletInfoLabel, { color: theme.textSecondary }]}>Wallet Balance:</Text>
+                    <Text style={[styles.walletInfoValue, { 
+                      color: walletBalance >= strategyPrice ? theme.success : theme.error 
+                    }]}>₹{walletBalance.toFixed(2)}</Text>
+                  </View>
+                  {walletBalance < strategyPrice && (
+                    <Text style={[styles.walletWarning, { color: theme.error }]}>
+                      Insufficient balance. Need ₹{(strategyPrice - walletBalance).toFixed(2)} more.
+                    </Text>
+                  )}
+                </View>
+              )}
 
               {/* What You Get Section */}
               <View style={[styles.whatYouGetBox, { backgroundColor: isDark ? 'rgba(16, 185, 129, 0.1)' : '#D1FAE5' }]}>
@@ -239,18 +391,29 @@ export default function MarketplaceStrategyDetailScreen() {
               <TouchableOpacity 
                 style={[styles.modalCancelBtn, { borderColor: theme.border }]}
                 onPress={() => setShowSubscribeModal(false)}
+                disabled={isSubscribing}
               >
                 <Text style={[styles.modalCancelText, { color: theme.textSecondary }]}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity 
-                style={[styles.modalSubscribeBtn, { backgroundColor: theme.primary }]}
-                onPress={() => {
-                  setShowSubscribeModal(false);
-                  // Handle subscription logic here
-                }}
+                style={[styles.modalSubscribeBtn, { 
+                  backgroundColor: isSubscribing || (strategyPrice > 0 && walletBalance < strategyPrice) 
+                    ? (isDark ? '#1a1a35' : '#E2E8F0') 
+                    : theme.primary 
+                }]}
+                onPress={handleSubscribe}
+                disabled={isSubscribing || (strategyPrice > 0 && walletBalance < strategyPrice)}
               >
-                <CheckCircle size={18} color="#fff" weight="fill" />
-                <Text style={styles.modalSubscribeText}>Subscribe Now</Text>
+                {isSubscribing ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <>
+                    <CheckCircle size={18} color="#fff" weight="fill" />
+                    <Text style={styles.modalSubscribeText}>
+                      {strategyPrice > 0 ? `Pay ₹${strategyPrice}` : 'Subscribe Now'}
+                    </Text>
+                  </>
+                )}
               </TouchableOpacity>
             </View>
           </View>
@@ -295,13 +458,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16, 
     paddingTop: 16 
   },
-  metricsRow: {
-    flexDirection: 'row',
-    gap: 12,
+  metricsScroll: {
     marginBottom: 16,
   },
+  metricsScrollContent: {
+    paddingRight: 16,
+    gap: 12,
+  },
   metricCard: {
-    flex: 1,
+    width: 120,
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
     padding: 16,
@@ -314,7 +479,7 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   metricValue: {
-    fontSize: 20,
+    fontSize:17,
     fontWeight: '700',
     marginBottom: 4,
   },
@@ -392,7 +557,7 @@ const styles = StyleSheet.create({
     bottom: 0,
     paddingTop: 12,
     paddingBottom: 12,
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     flexDirection: 'row',
     gap: 12,
     borderTopWidth: 1,
@@ -405,7 +570,7 @@ const styles = StyleSheet.create({
   footerInline: {
     paddingTop: 16,
     paddingBottom: 16,
-    paddingHorizontal: 0,
+    paddingHorizontal: 16,
     flexDirection: 'row',
     gap: 12,
     borderTopWidth: 1,
@@ -413,18 +578,20 @@ const styles = StyleSheet.create({
   },
   closeButton: {
     flex: 0.48,
-    paddingVertical: 12,
+    marginHorizontal:8,
+    paddingVertical: 10,
     borderRadius: 12,
     alignItems: 'center',
     borderWidth: 1.5,
   },
   closeButtonText: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '700',
   },
   subscribeButton: {
     flex: 0.48,
-    paddingVertical: 12,
+    marginHorizontal: 6,
+    paddingVertical: 10,
     borderRadius: 12,
     alignItems: 'center',
   },
@@ -508,6 +675,30 @@ const styles = StyleSheet.create({
     marginTop: 8,
     marginBottom: 16,
     backgroundColor: '#E8FFFB',
+  },
+  walletInfoBox: {
+    borderRadius: 12,
+    padding: 14,
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  walletInfoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  walletInfoLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  walletInfoValue: {
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  walletWarning: {
+    fontSize: 13,
+    fontWeight: '500',
+    marginTop: 6,
   },
   whatYouGetHeader: {
     flexDirection: 'row',

@@ -2,54 +2,30 @@ import { colors, getTheme } from '@/constants/styles';
 import { useTheme } from '@/context/ThemeContext';
 import { apiKeyService, copyTradingService } from '@/services';
 import {
-  ArrowRight,
-  CaretDown,
-  Copy,
-  GearSix,
-  Link,
-  PencilSimple,
-  Plus,
-  Sparkle,
-  Star,
-  Trash,
-  TrendUp,
-  Users,
-  Warning,
-  WifiHigh,
+    ArrowRight,
+    CaretDown,
+    Copy,
+    GearSix,
+    Link,
+    PencilSimple,
+    Plus,
+    Sparkle,
+    Star,
+    Trash,
+    TrendUp,
+    Users,
+    Warning,
+    WifiHigh,
 } from 'phosphor-react-native';
 import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, Modal, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import CopyTradingScreen from '../copy-trading';
 
-// Mock data for unlinked accounts
-const UNLINKED_ACCOUNTS = [
-  { id: '1', name: 'ghghgh', broker: 'ghghgh', status: 'Not linked to any master account' },
-  { id: '2', name: 'ghgfh', broker: 'ghgfhgfh', status: 'Not linked to any master account' },
-];
-
-// Mock data for all accounts
-const ALL_ACCOUNTS = [
-  { id: '1', name: 'zxcxzcxcxzc', broker: 'xzcxzcxcxzcxzcxczxc', type: 'Master Account', status: 'Inactive', following: null },
-  { id: '2', name: 'cvbvbv', broker: 'vbvbvb', type: 'Copy Account', status: 'Active', following: 'zxczxczxc' },
-  { id: '3', name: 'xcxzccxcx', broker: 'zxcxzccxc', type: 'Copy Account', status: 'Active', following: 'ghgjhjjj' },
-  { id: '4', name: 'xcxzc', broker: 'xcxc', type: 'Copy Account', status: 'Active', following: 'zxczxczxc' },
-  { id: '5', name: 'zxczxczxc', broker: 'xcxzczxc', type: 'Master Account', status: 'Active', following: null },
-  { id: '6', name: 'ghgjhjjj', broker: 'hjjgh', type: 'Master Account', status: 'Active', following: null },
-  { id: '7', name: 'ghghgh', broker: 'ghghgh', type: 'Copy Account', status: 'Active', following: null },
-  { id: '8', name: 'ghgfh', broker: 'ghgfhgfh', type: 'Copy Account', status: 'Active', following: null },
-];
-
-const MASTER_ACCOUNTS = [
-  { id: '1', name: 'zxcxzcxcxzc' },
-  { id: '5', name: 'zxczxczxc' },
-  { id: '6', name: 'ghgjhjjj' },
-];
-
 export default function WatchlistScreen() {
   const { isDark } = useTheme();
   const theme = getTheme(isDark);
   const [activeTab, setActiveTab] = useState<'trading-groups' | 'unlinked' | 'all'>('trading-groups');
-  const [allAccounts, setAllAccounts] = useState(ALL_ACCOUNTS);
+  const [allAccounts, setAllAccounts] = useState<any[]>([]);
   const [showAddAccountModal, setShowAddAccountModal] = useState(false);
   const [accountName, setAccountName] = useState('');
   const [accountType, setAccountType] = useState('Master Account');
@@ -140,7 +116,7 @@ export default function WatchlistScreen() {
           status: a.isActive ? 'Active' : 'Inactive',
           following: a.masterAccount?.name || null,
         }));
-        setAllAccounts(combinedAccounts.length > 0 ? combinedAccounts : ALL_ACCOUNTS);
+        setAllAccounts(combinedAccounts);
       }
 
       if (apiKeysRes.data) {
@@ -245,7 +221,7 @@ export default function WatchlistScreen() {
               <Users size={18} color={theme.textSecondary} />
             </View>
             <View style={styles.statContent}>
-              <Text style={[styles.statNumber, { color: theme.text }]}>0</Text>
+              <Text style={[styles.statNumber, { color: theme.text }]}>{allAccounts.length}</Text>
               <Text style={[styles.statLabel, { color: theme.textSecondary }]}>Total Accounts</Text>
               <Text style={[styles.statDescription, { color: theme.textSecondary }]}>All trading accounts</Text>
             </View>
@@ -256,7 +232,7 @@ export default function WatchlistScreen() {
               <TrendUp size={18} color={theme.textSecondary} />
             </View>
             <View style={styles.statContent}>
-              <Text style={[styles.statNumber, { color: theme.text }]}>0</Text>
+              <Text style={[styles.statNumber, { color: theme.text }]}>{masterAccounts.length}</Text>
               <Text style={[styles.statLabel, { color: theme.textSecondary }]}>Master Accounts</Text>
               <Text style={[styles.statDescription, { color: theme.textSecondary }]}>Strategy providers</Text>
             </View>
@@ -270,7 +246,7 @@ export default function WatchlistScreen() {
               <Copy size={18} color={theme.textSecondary} />
             </View>
             <View style={styles.statContent}>
-              <Text style={[styles.statNumber, { color: theme.text }]}>0</Text>
+              <Text style={[styles.statNumber, { color: theme.text }]}>{copyAccounts.length}</Text>
               <Text style={[styles.statLabel, { color: theme.textSecondary }]}>Copy Accounts</Text>
               <Text style={[styles.statDescription, { color: theme.textSecondary }]}>Strategy followers</Text>
             </View>
@@ -281,7 +257,7 @@ export default function WatchlistScreen() {
               <Star size={18} color={theme.textSecondary} />
             </View>
             <View style={styles.statContent}>
-              <Text style={[styles.statNumber, { color: theme.text }]}>0</Text>
+              <Text style={[styles.statNumber, { color: theme.text }]}>{allAccounts.filter(a => a.status === 'Active').length}</Text>
               <Text style={[styles.statLabel, { color: theme.textSecondary }]}>Active Accounts</Text>
               <Text style={[styles.statDescription, { color: theme.textSecondary }]}>Currently trading</Text>
             </View>
@@ -306,7 +282,7 @@ export default function WatchlistScreen() {
             weight={activeTab === 'trading-groups' ? 'fill' : 'regular'}
           />
           <Text style={[styles.tabText, { color: activeTab === 'trading-groups' ? colors.primary : theme.textSecondary }]}>
-            Trading Groups (0)
+            Trading Groups ({masterAccounts.length})
           </Text>
         </TouchableOpacity>
         
@@ -320,7 +296,7 @@ export default function WatchlistScreen() {
             weight={activeTab === 'unlinked' ? 'fill' : 'regular'}
           />
           <Text style={[styles.tabText, { color: activeTab === 'unlinked' ? colors.primary : theme.textSecondary }]}>
-            Unlinked Accounts (0)
+            Unlinked Accounts ({unlinkedAccounts.length})
           </Text>
         </TouchableOpacity>
         
@@ -342,96 +318,108 @@ export default function WatchlistScreen() {
       {/* Tab Content */}
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         {activeTab === 'trading-groups' && (
-          <>
-            {__DEV__ ? (
-              <CopyTradingScreen hideHeader hideTop />
-            ) : (
-              <View style={styles.emptyState}>
-                <View style={[styles.emptyIconContainer, { backgroundColor: theme.inputBg }]}>
-                  <Users size={48} color={theme.textSecondary} />
-                </View>
-                <Text style={[styles.emptyTitle, { color: theme.text }]}>No Trading Groups Yet</Text>
-                <Text style={[styles.emptyDescription, { color: theme.textSecondary }]}>\
-                  Create master accounts to start building your copy trading network
-                </Text>
-                <TouchableOpacity 
-                  style={[styles.createButton, { backgroundColor: colors.primary }]}
-                  onPress={() => setShowAddAccountModal(true)}
-                >
-                  <Plus size={20} color="#fff" weight="bold" />
-                  <Text style={styles.createButtonText}>Create Master Account</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-          </>
+          <CopyTradingScreen hideHeader hideTop />
         )}
 
         {activeTab === 'unlinked' && (
           <View style={styles.unlinkedContainer}>
-            {/* Warning Banner */}
-            <View style={[styles.warningBanner, { backgroundColor: isDark ? 'rgba(251, 191, 36, 0.15)' : '#FEF3C7' }]}>
-              <Warning size={20} color="#F59E0B" weight="fill" />
-              <Text style={[styles.warningText, { color: '#D97706' }]}>
-                These child accounts need to be linked to a master account to start copy trading.
-              </Text>
-            </View>
-            
-            {/* Unlinked Account Cards */}
-            {UNLINKED_ACCOUNTS.slice(0, unlinkedVisibleCount).map((account) => (
-              <View 
-                key={account.id}
-                style={[styles.unlinkedCard, { 
-                  backgroundColor: theme.surface, 
-                  borderColor: '#F59E0B',
-                }]}
-              >
-                <View style={styles.unlinkedTopRow}>
-                  <View style={[styles.unlinkedIcon, { backgroundColor: isDark ? 'rgba(251, 191, 36, 0.15)' : '#FEF3C7' }]}>
-                    <WifiHigh size={24} color="#F59E0B" weight="fill" />
-                  </View>
-                  <View style={styles.unlinkedInfo}>
-                    <Text style={[styles.unlinkedName, { color: theme.text }]}>{account.name}</Text>
-                    <Text style={[styles.unlinkedDetail, { color: theme.textSecondary }]}> {account.broker} • {account.status}</Text>
-                  </View>
+            {unlinkedAccounts.length === 0 ? (
+              <View style={styles.emptyState}>
+                <View style={[styles.emptyIconContainer, { backgroundColor: theme.inputBg }]}>
+                  <Link size={48} color={theme.textSecondary} />
                 </View>
-
-                <View style={styles.unlinkedBottomRow}>
-                  <View style={{ flex: 1 }} />
-                  <View style={styles.unlinkedActionsRow}>
-                    <TouchableOpacity 
-                      style={styles.linkButton}
-                      onPress={() => handleLinkToMaster(account)}
-                    >
-                      <ArrowRight size={16} color="#fff" weight="bold" />
-                      <Text style={styles.linkButtonText}>Link to Master</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.unlinkedDeleteBtn, { backgroundColor: 'rgba(239, 68, 68, 0.1)' }]}
-                      onPress={() => handleDeleteConfirm(account.name)}
-                    >
-                      <Trash size={18} color={colors.error} weight="bold" />
-                    </TouchableOpacity>
-                  </View>
-                </View>
+                <Text style={[styles.emptyTitle, { color: theme.text }]}>All Accounts Linked</Text>
+                <Text style={[styles.emptyDescription, { color: theme.textSecondary }]}>
+                  Every child account is properly linked to a master account
+                </Text>
               </View>
-            ))}
-            {/* Load More Button for Unlinked Accounts */}
-            {UNLINKED_ACCOUNTS.length > unlinkedVisibleCount && (
-              <TouchableOpacity
-                style={[styles.loadMoreBtn, { backgroundColor: isDark ? 'rgba(37, 99, 235, 0.15)' : colors.primary + '15', borderColor: colors.primary }]}
-                onPress={() => setUnlinkedVisibleCount(prev => prev + 10)}
-              >
-                <Text style={[styles.loadMoreText, { color: colors.primary }]}>Load More</Text>
-              </TouchableOpacity>
+            ) : (
+              <>
+                {/* Warning Banner */}
+                <View style={[styles.warningBanner, { backgroundColor: isDark ? 'rgba(251, 191, 36, 0.15)' : '#FEF3C7' }]}>
+                  <Warning size={20} color="#F59E0B" weight="fill" />
+                  <Text style={[styles.warningText, { color: '#D97706' }]}>
+                    These child accounts need to be linked to a master account to start copy trading.
+                  </Text>
+                </View>
+                
+                {/* Unlinked Account Cards */}
+                {unlinkedAccounts.slice(0, unlinkedVisibleCount).map((account) => (
+                  <View 
+                    key={account.id}
+                    style={[styles.unlinkedCard, { 
+                      backgroundColor: theme.surface, 
+                      borderColor: '#F59E0B',
+                    }]}
+                  >
+                    <View style={styles.unlinkedTopRow}>
+                      <View style={[styles.unlinkedIcon, { backgroundColor: isDark ? 'rgba(251, 191, 36, 0.15)' : '#FEF3C7' }]}>
+                        <WifiHigh size={24} color="#F59E0B" weight="fill" />
+                      </View>
+                      <View style={styles.unlinkedInfo}>
+                        <Text style={[styles.unlinkedName, { color: theme.text }]}>{account.name}</Text>
+                        <Text style={[styles.unlinkedDetail, { color: theme.textSecondary }]}> {account.broker} • {account.status}</Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.unlinkedBottomRow}>
+                      <View style={{ flex: 1 }} />
+                      <View style={styles.unlinkedActionsRow}>
+                        <TouchableOpacity 
+                          style={styles.linkButton}
+                          onPress={() => handleLinkToMaster(account)}
+                        >
+                          <ArrowRight size={16} color="#fff" weight="bold" />
+                          <Text style={styles.linkButtonText}>Link to Master</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.unlinkedDeleteBtn, { backgroundColor: 'rgba(239, 68, 68, 0.1)' }]}
+                          onPress={() => handleDeleteConfirm(account.name)}
+                        >
+                          <Trash size={18} color={colors.error} weight="bold" />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  </View>
+                ))}
+                {/* Load More Button for Unlinked Accounts */}
+                {unlinkedAccounts.length > unlinkedVisibleCount && (
+                  <TouchableOpacity
+                    style={[styles.loadMoreBtn, { backgroundColor: isDark ? 'rgba(37, 99, 235, 0.15)' : colors.primary + '15', borderColor: colors.primary }]}
+                    onPress={() => setUnlinkedVisibleCount(prev => prev + 10)}
+                  >
+                    <Text style={[styles.loadMoreText, { color: colors.primary }]}>Load More</Text>
+                  </TouchableOpacity>
+                )}
+              </>
             )}
           </View>
         )}
 
         {activeTab === 'all' && (
           <View style={styles.allAccountsContainer}>
-            {/* Account Grid */}
-            <View style={styles.accountsGrid}>
-              {allAccounts.slice(0, allAccountsVisibleCount).map((account) => (
+            {allAccounts.length === 0 ? (
+              <View style={styles.emptyState}>
+                <View style={[styles.emptyIconContainer, { backgroundColor: theme.inputBg }]}>
+                  <GearSix size={48} color={theme.textSecondary} />
+                </View>
+                <Text style={[styles.emptyTitle, { color: theme.text }]}>No Accounts Yet</Text>
+                <Text style={[styles.emptyDescription, { color: theme.textSecondary }]}>
+                  Start by creating your first trading account to begin copy trading
+                </Text>
+                <TouchableOpacity 
+                  style={[styles.createButton, { backgroundColor: colors.primary }]}
+                  onPress={() => setShowAddAccountModal(true)}
+                >
+                  <Plus size={20} color="#fff" weight="bold" />
+                  <Text style={styles.createButtonText}>Create Account</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <>
+                {/* Account Grid */}
+                <View style={styles.accountsGrid}>
+                  {allAccounts.slice(0, allAccountsVisibleCount).map((account) => (
                 <View 
                   key={account.id}
                   style={[styles.accountCard, { 
@@ -499,6 +487,8 @@ export default function WatchlistScreen() {
               >
                 <Text style={[styles.loadMoreText, { color: colors.primary }]}>Load More</Text>
               </TouchableOpacity>
+            )}
+          </>
             )}
           </View>
         )}

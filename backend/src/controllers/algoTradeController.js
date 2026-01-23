@@ -1,4 +1,4 @@
-import { Trade, Strategy, ApiKey, User, StrategySubscription, StrategyBroker, Wallet, WalletTransaction, PerTradeCharge, PaperPosition } from '../models/index.js';
+import { Trade, Strategy, ApiKey, User, StrategySubscription, StrategyBroker, Wallet, WalletTransaction, PerTradeCharge, PaperPosition, SignalLog } from '../models/index.js';
 import { mt5Broker } from '../../algoengine/index.js';
 import { emitTradeUpdate, emitPaperPositionUpdate } from '../config/socket.js';
 import { Op } from 'sequelize';
@@ -8,6 +8,8 @@ import redisClient from '../utils/redisClient.js';
 import { sequelize } from '../config/database.js';
 import paperTradingService from '../services/PaperTradingService.js';
 import * as exchangeService from '../services/exchangeService.js';
+import centralizedStreamingService from '../services/CentralizedStreamingService.js';
+import emailNotificationHelper from '../utils/emailNotificationHelper.js';
 
 /**
  * Get admin-defined per-trade charge for a strategy
@@ -60,10 +62,10 @@ const processPerTradeCharge = async ({ subscriberId, ownerId, strategyId, tradeI
   const transaction = await sequelize.transaction();
   
   try {
-    // Skip if no charge or owner trading their own strategy
-    if (!chargeAmount || chargeAmount <= 0 || subscriberId === ownerId) {
+    // Skip only if no charge amount configured
+    if (!chargeAmount || chargeAmount <= 0) {
       await transaction.commit();
-      return { success: true, skipped: true, reason: 'No charge applicable or owner trading' };
+      return { success: true, skipped: true, reason: 'No charge applicable' };
     }
 
     // Get subscriber wallet
@@ -375,7 +377,7 @@ export const executeStrategyTrade = async (req, res) => {
       amount: tradeResult.volume,
       price: tradeResult.openPrice,
       currentPrice: tradeResult.openPrice,
-      status: tradeResult.status === 'FILLED' ? 'Completed' : 'Pending',
+      status: tradeResult.status === 'FILLED' ? 'Open' : 'Pending',
       date: new Date(),
       broker: 'MT5',
       brokerType: apiKey.broker,
@@ -410,6 +412,11 @@ export const executeStrategyTrade = async (req, res) => {
 
     // Emit real-time update
     emitTradeUpdate(userId, trade, 'create');
+
+    // Send email notification (async, don't wait)
+    emailNotificationHelper.notifyTradeOpened(userId, trade.toJSON()).catch(err => 
+      console.log('[Email] Trade opened notification failed:', err.message)
+    );
 
     // Prepare response
     res.status(201).json({
@@ -545,7 +552,7 @@ export const executeManualTrade = async (req, res) => {
       amount: tradeResult.volume,
       price: tradeResult.openPrice,
       currentPrice: tradeResult.openPrice,
-      status: tradeResult.status === 'FILLED' ? 'Completed' : 'Pending',
+      status: tradeResult.status === 'FILLED' ? 'Open' : 'Pending',
       date: new Date(),
       broker: 'MT5',
       brokerType: apiKey.broker,
@@ -673,7 +680,7 @@ export const closeAlgoTrade = async (req, res) => {
     const isConnected = await mt5Broker.healthCheck();
     if (!isConnected) {
       await mt5Broker.initialize({
-        apiKey: apiKey.apiKey,
+        apiKey: apiKey.accessToken,
         accountId: apiKey.appName
       });
     }
@@ -696,6 +703,15 @@ export const closeAlgoTrade = async (req, res) => {
     });
 
     emitTradeUpdate(userId, trade, 'update');
+
+    // Send email notification for trade close (async, don't wait)
+    if (closeResult?.success) {
+      emailNotificationHelper.notifyTradeClosed(userId, {
+        ...trade.toJSON(),
+        exitPrice: closeResult.closePrice,
+        pnl: closeResult.profit
+      }).catch(err => console.log('[Email] Trade closed notification failed:', err.message));
+    }
 
     res.json({
       success: true,
@@ -816,14 +832,122 @@ export const getAccountInfo = async (req, res) => {
 };
 
 /**
- * Get Multiple Symbol Prices (Batch Request)
+ * Sync positions from broker - detect broker-closed positions and update database
+ * POST /api/algo-trades/sync-positions
+ */
+export const syncBrokerPositions = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { segment = 'Forex' } = req.body;
+
+    console.log(`🔄 [SYNC] Starting broker position sync for user ${userId}, segment: ${segment}`);
+
+    // Get user's API key
+    const apiKey = await ApiKey.findOne({
+      where: { userId, segment, broker: 'MT5', isActive: true }
+    });
+
+    if (!apiKey || !apiKey.accessToken || !apiKey.appName) {
+      return res.status(400).json({
+        success: false,
+        error: 'No valid MT5 API key found'
+      });
+    }
+
+    // Initialize MT5 broker
+    await mt5Broker.initialize({
+      apiKey: apiKey.accessToken,
+      accountId: apiKey.appName
+    });
+
+    // Get broker positions
+    const brokerPositions = await mt5Broker.getOpenOrders();
+    const brokerOrderIds = new Set(
+      brokerPositions.map(p => String(p.id || p.orderId || p.ticket))
+    );
+
+    console.log(`📊 [SYNC] Broker has ${brokerPositions.length} open position(s)`);
+    console.log(`📊 [SYNC] Broker order IDs:`, Array.from(brokerOrderIds));
+
+    // Get database open positions
+    const openTrades = await Trade.findAll({
+      where: {
+        userId,
+        status: 'Open',
+        broker: 'MT5'
+      }
+    });
+
+    console.log(`📊 [SYNC] Database has ${openTrades.length} open position(s)`);
+
+    let closedCount = 0;
+    const closedTrades = [];
+
+    // Check each trade
+    for (const trade of openTrades) {
+      const tradeOrderId = String(trade.orderId);
+      
+      // If trade is marked Open in DB but not in broker, it was closed on broker
+      if (!brokerOrderIds.has(tradeOrderId)) {
+        console.log(`🔍 [SYNC] Trade ${trade.id} (Order ${tradeOrderId}) not found in broker - marking as closed`);
+        
+        // Update trade status
+        await trade.update({
+          status: 'Completed',
+          closedAt: new Date(),
+          closedReason: 'Position closed on broker (manual sync)',
+          currentPrice: trade.currentPrice || trade.price
+        });
+
+        emitTradeUpdate(userId, trade, 'update');
+        closedTrades.push({
+          id: trade.id,
+          orderId: trade.orderId,
+          symbol: trade.symbol,
+          type: trade.type
+        });
+        closedCount++;
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Synced ${openTrades.length} position(s), closed ${closedCount}`,
+      brokerPositions: brokerPositions.length,
+      databasePositions: openTrades.length,
+      closedTrades,
+      closedCount
+    });
+
+  } catch (error) {
+    console.error('Sync positions error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to sync positions',
+      details: error.message
+    });
+  }
+};
+
+/**
+ * Get real-time prices for multiple symbols
  * POST /api/algo-trades/prices
- * @body { symbols: string[], segment?: string }
+ * @body { symbols: string[], segment?: string, brokerInfo?: array }
+ * 
+ * ARCHITECTURE PRINCIPLES:
+ * ========================
+ * 1. BROKER-BASED STREAMING (NOT SYMBOL-BASED)
+ *    - If position is on MT5 broker → Use MT5 (even for BTCUSD)
+ *    - If position is on CCXT exchange → Use CCXT
+ *    - This ensures prices sync between broker dashboard and our dashboard
+ * 
+ * 2. FALLBACK CHAIN FOR USERS WITHOUT API KEYS
+ *    Priority: User's API → Any User's Recent API → Public Exchange → MT5 Fallback
  */
 export const getMultipleSymbolPrices = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { symbols, segment = 'Forex' } = req.body;
+    const { symbols, segment = 'Forex', brokerInfo = [] } = req.body;
 
     if (!symbols || !Array.isArray(symbols) || symbols.length === 0) {
       return res.status(400).json({ 
@@ -833,44 +957,78 @@ export const getMultipleSymbolPrices = async (req, res) => {
       });
     }
 
-    // Get API key
-    const apiKey = await ApiKey.findOne({
-      where: { userId, segment, broker: 'MT5' }
-    });
-
-    if (!apiKey) {
-      return res.status(404).json({ 
-        success: false, 
-        error: 'No MT5 API key found for segment: ' + segment 
-      });
+    console.log(`📊 Fetching prices for ${symbols.length} symbols, segment: ${segment}, user: ${userId}`);
+    if (brokerInfo.length > 0) {
+      console.log(`📊 Broker info provided:`, JSON.stringify(brokerInfo, null, 2));
     }
 
-    // Initialize broker if needed
-    const isConnected = await mt5Broker.healthCheck();
-    if (!isConnected) {
-      await mt5Broker.initialize({
-        apiKey: apiKey.accessToken || apiKey.apiKey,
-        accountId: apiKey.appName
-      });
-    }
-
-    // Fetch prices for all symbols
     const prices = {};
     const errors = {};
 
-    console.log(`📊 Fetching prices for ${symbols.length} symbols:`, symbols);
-
     for (const symbol of symbols) {
       try {
-        const price = await mt5Broker.getPrice(symbol);
-        prices[symbol] = {
-          bid: price.bid,
-          ask: price.ask,
-          last: price.last || price.bid,
-          spread: price.ask - price.bid,
-          time: new Date().toISOString()
-        };
-        console.log(`✅ Price fetched for ${symbol}:`, prices[symbol]);
+        // Find broker info for this symbol
+        const symbolInfo = brokerInfo.find(b => b.symbol === symbol);
+        const brokerData = symbolInfo?.brokers?.[0];
+        
+        let price = null;
+
+        // CASE 1: Try centralized streaming first (covers Forex, Gold, etc.)
+        const centralPrice = centralizedStreamingService.getPrice(symbol.toUpperCase());
+        if (centralPrice?.bid) {
+          console.log(`📊 [${symbol}] Using centralized streaming: ${centralPrice.bid}/${centralPrice.ask}`);
+          price = {
+            bid: centralPrice.bid,
+            ask: centralPrice.ask,
+            last: centralPrice.last || centralPrice.bid,
+            source: `centralized:${centralPrice.source || 'streaming'}`
+          };
+        }
+
+        // CASE 2: Specific broker provided - for CCXT crypto exchanges
+        if (!price && brokerData?.brokerId) {
+          const apiKey = await ApiKey.findByPk(brokerData.brokerId);
+          
+          if (apiKey) {
+            // CCXT exchange for crypto
+            if (apiKey.exchangeId && apiKey.apiKey && apiKey.apiSecret) {
+              console.log(`📊 [${symbol}] Using CCXT ${apiKey.exchangeId}`);
+              price = await fetchFromCCXT(apiKey, symbol);
+            }
+          }
+        }
+        
+        // CASE 3: No specific broker, try user's crypto API key
+        if (!price) {
+          // Check if crypto or forex based on market
+          const market = symbolInfo?.market || segment;
+          
+          if (market === 'Crypto') {
+            // Try user's crypto API key first
+            const userCryptoKey = await ApiKey.findOne({
+              where: { userId, segment: 'Crypto', status: 'Active' },
+              order: [['updatedAt', 'DESC']]
+            });
+            
+            if (userCryptoKey && userCryptoKey.exchangeId) {
+              console.log(`📊 [${symbol}] Using user's crypto API key ${userCryptoKey.id}`);
+              price = await fetchFromCCXT(userCryptoKey, symbol);
+            }
+          }
+          // For forex/indian, centralized streaming should have been used above
+        }
+        
+        // CASE 4: No user API key - use GLOBAL FALLBACK
+        if (!price) {
+          console.log(`📊 [${symbol}] Using global fallback chain`);
+          price = await fetchFromGlobalFallback(symbol, symbolInfo?.market || segment);
+        }
+
+        if (price) {
+          prices[symbol] = price;
+        } else {
+          errors[symbol] = 'Could not fetch price from any source';
+        }
       } catch (error) {
         console.error(`❌ Failed to fetch price for ${symbol}:`, error.message);
         errors[symbol] = error.message;
@@ -895,6 +1053,194 @@ export const getMultipleSymbolPrices = async (req, res) => {
     });
   }
 };
+
+// Crypto symbol detection regex
+const CRYPTO_SYMBOLS_REGEX = /BTC|ETH|XRP|DOGE|SOL|AVAX|ADA|DOT|MATIC|LINK|UNI|AAVE|BNB|LTC|XLM|ATOM/i;
+
+/**
+ * Helper: Determine if a symbol is crypto
+ */
+function isCryptoSymbol(symbol) {
+  return CRYPTO_SYMBOLS_REGEX.test(symbol.toUpperCase());
+}
+
+/**
+ * Helper: Fetch price from MT5 using a specific API key
+ */
+async function fetchFromMT5Global(apiKey, symbol) {
+  try {
+    const isConnected = await mt5Broker.healthCheck().catch(() => false);
+    if (!isConnected) {
+      await mt5Broker.initialize({
+        apiKey: apiKey.accessToken || apiKey.apiKey,
+        accountId: apiKey.appName
+      });
+    }
+
+    const price = await mt5Broker.getPrice(symbol.toUpperCase());
+    if (price && price.bid) {
+      return {
+        bid: price.bid,
+        ask: price.ask,
+        last: price.last || price.bid,
+        spread: price.ask - price.bid,
+        time: new Date().toISOString(),
+        source: 'MT5'
+      };
+    }
+    return null;
+  } catch (error) {
+    console.error(`Error fetching MT5 price for ${symbol}:`, error.message);
+    return null;
+  }
+}
+
+/**
+ * Helper: Fetch price from CCXT exchange
+ */
+async function fetchFromCCXT(apiKey, symbol) {
+  try {
+    const ccxtModule = await import('ccxt');
+    
+    // Map custom exchange IDs to CCXT exchange classes
+    const exchangeIdMap = {
+      'deltademo': 'delta', // Delta Demo uses the same CCXT class as Delta
+    };
+    
+    const ccxtExchangeId = exchangeIdMap[apiKey.exchangeId] || apiKey.exchangeId;
+    const ExchangeClass = ccxtModule.default[ccxtExchangeId];
+    
+    if (!ExchangeClass) {
+      console.warn(`Exchange ${apiKey.exchangeId} not found in CCXT`);
+      return null;
+    }
+
+    const config = {
+      apiKey: apiKey.apiKey,
+      secret: apiKey.apiSecret,
+      enableRateLimit: true
+    };
+
+    // Configure Delta Exchange for India API
+    if (apiKey.exchangeId === 'delta') {
+      config.urls = {
+        api: {
+          public: 'https://api.india.delta.exchange',
+          private: 'https://api.india.delta.exchange',
+        },
+      };
+    }
+
+    // Configure Delta Exchange Demo API
+    if (apiKey.exchangeId === 'deltademo') {
+      config.urls = {
+        api: {
+          public: 'https://cdn.demo.delta.exchange',
+          private: 'https://api.demo.delta.exchange',
+        },
+      };
+    }
+
+    if (apiKey.passphrase) {
+      config.password = apiKey.passphrase;
+    }
+
+    const exchange = new ExchangeClass(config);
+    const ticker = await exchange.fetchTicker(symbol);
+    
+    console.log(`✅ [CCXT ${apiKey.exchangeId}] Price fetched for ${symbol}:`, ticker.last);
+    
+    return {
+      bid: ticker.bid,
+      ask: ticker.ask,
+      last: ticker.last || ticker.bid,
+      spread: ticker.ask - ticker.bid,
+      time: new Date().toISOString(),
+      source: apiKey.exchangeId
+    };
+  } catch (error) {
+    console.error(`Error fetching CCXT price for ${symbol}:`, error.message);
+    return null;
+  }
+}
+
+/**
+ * Helper: Fetch from public exchange (no API key needed)
+ */
+async function fetchFromPublicExchange(symbol) {
+  try {
+    const ccxtModule = await import('ccxt');
+    const exchange = new ccxtModule.default.binance({ enableRateLimit: true });
+    
+    // Convert symbol format for Binance if needed (BTCUSD → BTC/USDT)
+    let binanceSymbol = symbol;
+    if (symbol.endsWith('USD') && !symbol.includes('/')) {
+      binanceSymbol = symbol.replace('USD', '/USDT');
+    } else if (!symbol.includes('/')) {
+      binanceSymbol = `${symbol}/USDT`;
+    }
+
+    const ticker = await exchange.fetchTicker(binanceSymbol);
+    
+    console.log(`✅ [PUBLIC Binance] Price fetched for ${symbol} (${binanceSymbol}):`, ticker.last);
+    
+    return {
+      bid: ticker.bid,
+      ask: ticker.ask,
+      last: ticker.last || ticker.bid,
+      spread: ticker.ask - ticker.bid,
+      time: new Date().toISOString(),
+      source: 'public:binance'
+    };
+  } catch (error) {
+    console.error(`Error fetching public price for ${symbol}:`, error.message);
+    return null;
+  }
+}
+
+/**
+ * Helper: Global fallback chain for users without API keys
+ * Architecture: ALL data from CentralizedStreamingService (admin configured)
+ * Brokers are ONLY for trade execution, NOT for data streaming
+ */
+async function fetchFromGlobalFallback(symbol, market) {
+  // ALL symbols use centralized streaming from admin panel
+  try {
+    const centralPrice = centralizedStreamingService.getPrice(symbol.toUpperCase());
+    if (centralPrice?.bid) {
+      console.log(`📡 Using centralized streaming for ${symbol}: ${centralPrice.bid}/${centralPrice.ask}`);
+      return {
+        bid: centralPrice.bid,
+        ask: centralPrice.ask,
+        last: centralPrice.last || centralPrice.bid,
+        source: `centralized:${centralPrice.source || 'streaming'}`
+      };
+    }
+  } catch (err) {
+    console.warn(`⚠️ Centralized streaming not available: ${err.message}`);
+  }
+  
+  // No price available - streaming must be configured from admin panel
+  console.warn(`⚠️ No price source available for ${symbol}. Ensure centralized streaming is running from admin panel.`);
+  return null;
+}
+
+/**
+ * Helper: Fetch price from MT5 (legacy - for backward compatibility)
+ */
+async function fetchFromMT5(userId, symbol, segment) {
+  const apiKey = await ApiKey.findOne({
+    where: { userId, segment, broker: 'MT5' }
+  });
+
+  if (!apiKey) {
+    console.warn(`⚠️ No MT5 API key found for user ${userId}, segment: ${segment}`);
+    return null;
+  }
+
+  return await fetchFromMT5Global(apiKey, symbol);
+}
+
 /**
  * Execute Trade from TradingView Webhook (Multi-Subscriber)
  * POST /api/algo-trades/webhook
@@ -1004,6 +1350,35 @@ export const executeTradingViewWebhook = async (req, res) => {
     const userId = strategy.userId;
     const strategyId = strategy.id;
 
+    // Check Single Leg Mode - Ignore repeat signals
+    const legMode = strategy.legMode || 'multi';
+    const lastSignal = strategy.lastSignal;
+    
+    if (legMode === 'single' && !isCloseSignal) {
+      // In single leg mode, check if this is a repeat signal
+      if (lastSignal === parsedSignal) {
+        console.log(`🔄 Single Leg Mode: Ignoring repeat signal ${parsedSignal} (last signal was also ${lastSignal})`);
+        return res.status(200).json({
+          success: true,
+          message: 'Signal ignored (Single Leg Mode - no repeat signals)',
+          reason: 'repeat_signal_ignored',
+          signal: parsedSignal,
+          lastSignal: lastSignal,
+          legMode: 'single',
+          strategyId: strategy.id,
+          strategyName: strategy.name
+        });
+      }
+      
+      // Update last signal for single leg mode
+      await strategy.update({ lastSignal: parsedSignal });
+      console.log(`📝 Single Leg Mode: Updated lastSignal to ${parsedSignal}`);
+    } else if (isCloseSignal && legMode === 'single') {
+      // Close signal resets the lastSignal
+      await strategy.update({ lastSignal: null });
+      console.log(`📝 Single Leg Mode: Reset lastSignal (CLOSE signal received)`);
+    }
+
     // Check if strategy is active
     if (!strategy.isActive) {
       console.warn(`❌ Strategy ${strategy.name} is inactive`);
@@ -1067,7 +1442,8 @@ export const executeTradingViewWebhook = async (req, res) => {
 
     // Handle CLOSE signal - close positions for all users
     if (isCloseSignal) {
-      console.log(`🔄 Close signal received - closing positions for ${usersToExecute.length} users`);
+      console.log(`🔄 Close signal (0) received - closing positions for ${usersToExecute.length} users`);
+      console.log(`🔄 Strategy symbol: ${strategy.symbol}, Custom symbol: ${customSymbol}`);
       
       const closeResults = [];
       
@@ -1218,15 +1594,40 @@ export const executeTradingViewWebhook = async (req, res) => {
           }
 
           console.log(`📊 Found ${openPositions.length} open positions for user ${targetUserId}`);
+          console.log(`📊 Broker positions:`, openPositions.map(p => ({ id: p.id, symbol: p.symbol, type: p.type })));
 
           // Close all positions for this strategy's symbol
           const symbolToClose = customSymbol || strategy.symbol;
+          console.log(`📊 Symbol to close: ${symbolToClose}`);
+          
           let closedCount = 0;
           let failedCount = 0;
 
+          // Symbol mapping for common aliases
+          const symbolAliases = {
+            'XAUUSD': ['GOLD', 'XAUUSD', 'GOLD.a', 'XAUUSD.a'],
+            'GOLD': ['GOLD', 'XAUUSD', 'GOLD.a', 'XAUUSD.a'],
+            'XAGUSD': ['SILVER', 'XAGUSD', 'SILVER.a', 'XAGUSD.a'],
+            'SILVER': ['SILVER', 'XAGUSD', 'SILVER.a', 'XAGUSD.a']
+          };
+
+          const matchesSymbol = (posSymbol, targetSymbol) => {
+            if (!targetSymbol) return true; // No filter, close all
+            const posUpper = posSymbol?.toUpperCase() || '';
+            const targetUpper = targetSymbol?.toUpperCase() || '';
+            
+            // Direct match
+            if (posUpper === targetUpper) return true;
+            
+            // Check aliases
+            const aliases = symbolAliases[targetUpper] || [targetUpper];
+            return aliases.some(alias => posUpper.includes(alias) || alias.includes(posUpper));
+          };
+
           for (const position of openPositions) {
             // Filter by symbol if specified
-            if (symbolToClose && position.symbol !== symbolToClose.toUpperCase()) {
+            if (symbolToClose && !matchesSymbol(position.symbol, symbolToClose)) {
+              console.log(`⏭️ Skipping position ${position.id} (${position.symbol}) - doesn't match ${symbolToClose}`);
               continue;
             }
 
@@ -1272,10 +1673,12 @@ export const executeTradingViewWebhook = async (req, res) => {
                     }
                   });
 
-                  // Close corresponding paper position
+                  // Close corresponding paper position (if any)
                   const paperPosition = await PaperPosition.findOne({
                     where: {
-                      tradeId: dbTrade.id,
+                      userId: targetUserId,
+                      strategyId,
+                      orderId: String(position.id),
                       status: 'Open'
                     }
                   });
@@ -1432,23 +1835,32 @@ export const executeTradingViewWebhook = async (req, res) => {
       }
 
       // Check if signal is same as existing position direction
+      // In Multi Leg mode: allow same direction signals (open new positions)
+      // In Single Leg mode: skip same direction signals (already handled at strategy level, but also check here per-user)
       if (existingPosition && existingType) {
         const newType = parsedSignal === 'BUY' ? 'Buy' : 'Sell';
 
         if (existingType === newType) {
-          // Same direction signal - skip execution
-          console.log(`⏭️ Skipping duplicate ${newType} signal for user ${targetUserId} - already in ${existingType} position (${isPaperMode ? 'Paper' : 'Live'})`);
-          
-          executionResults.push({
-            userId: targetUserId,
-            success: true,
-            action: 'skipped',
-            message: `Already in ${existingType} position`,
-            existingPositionId: existingPosition.id,
-            mode: tradeMode
-          });
-          
-          continue;
+          // Same direction signal - only skip if in SINGLE leg mode
+          if (legMode === 'single') {
+            console.log(`⏭️ Skipping duplicate ${newType} signal for user ${targetUserId} - already in ${existingType} position (Single Leg Mode, ${isPaperMode ? 'Paper' : 'Live'})`);
+            
+            executionResults.push({
+              userId: targetUserId,
+              success: true,
+              action: 'skipped',
+              message: `Already in ${existingType} position (Single Leg Mode)`,
+              existingPositionId: existingPosition.id,
+              mode: tradeMode,
+              legMode: 'single'
+            });
+            
+            continue;
+          } else {
+            // Multi Leg mode - allow opening additional same-direction positions
+            console.log(`📈 Multi Leg Mode: Opening new ${newType} position for user ${targetUserId} even though already in ${existingType} position`);
+            // Don't skip - continue to open new position
+          }
         } else {
           // Opposite direction signal - close existing position first, then open new
           console.log(`🔄 Opposite signal detected for user ${targetUserId} - closing ${existingType} before opening ${newType} (${isPaperMode ? 'Paper' : 'Live'})`);
@@ -1475,18 +1887,66 @@ export const executeTradingViewWebhook = async (req, res) => {
             console.log(`✅ Closed paper position ${existingPosition.orderId} for user ${targetUserId}`);
             emitPaperPositionUpdate(targetUserId, existingPosition, 'update');
           } else {
-            // Close live trade
-            await existingPosition.update({
-              status: 'Closed',
-              currentPrice: existingPosition.price, // Use entry price as close price for now
-              metadata: {
-                closedReason: 'Opposite signal - Position reversed',
-                closedBy: 'TradingView Webhook',
-                closedAt: new Date().toISOString()
-              }
-            });
+            // Close live trade - MUST CLOSE ON BROKER FIRST
+            console.log(`🔄 [WEBHOOK] Attempting to close live position ${existingPosition.orderId} on broker...`);
             
-            console.log(`✅ Closed live trade ${existingPosition.orderId} for user ${targetUserId}`);
+            try {
+              // Get user's API key for MT5
+              const userApiKey = await ApiKey.findOne({
+                where: {
+                  userId: targetUserId,
+                  segment: strategy.segment,
+                  broker: 'MT5',
+                  isActive: true
+                }
+              });
+
+              if (userApiKey && userApiKey.accessToken && userApiKey.appName) {
+                // Initialize broker for this user
+                await mt5Broker.initialize({
+                  apiKey: userApiKey.accessToken,
+                  accountId: userApiKey.appName
+                });
+
+                // Close position on broker
+                const closeResult = await mt5Broker.closeTrade(existingPosition.orderId);
+                console.log(`✅ [WEBHOOK] Broker close result for ${existingPosition.orderId}:`, closeResult);
+
+                // Update database with broker response
+                await existingPosition.update({
+                  status: 'Completed',
+                  closedAt: new Date(),
+                  currentPrice: closeResult.closePrice || existingPosition.currentPrice || existingPosition.price,
+                  profit: closeResult.profit || 0,
+                  closedReason: 'Opposite signal - Position reversed',
+                  brokerResponseJson: {
+                    ...(existingPosition.brokerResponseJson || {}),
+                    closeResult,
+                    closedBy: 'TradingView Webhook',
+                    closedAt: new Date().toISOString()
+                  }
+                });
+
+                console.log(`✅ [WEBHOOK] Closed live trade ${existingPosition.orderId} on broker and database for user ${targetUserId}`);
+              } else {
+                console.warn(`⚠️ [WEBHOOK] No valid MT5 API key found for user ${targetUserId}, updating DB only`);
+                await existingPosition.update({
+                  status: 'Completed',
+                  closedAt: new Date(),
+                  currentPrice: existingPosition.price,
+                  closedReason: 'Opposite signal - Position reversed (no broker key)'
+                });
+              }
+            } catch (closeError) {
+              console.error(`❌ [WEBHOOK] Failed to close position ${existingPosition.orderId} on broker:`, closeError.message);
+              // Still update database even if broker close fails
+              await existingPosition.update({
+                status: 'Completed',
+                closedAt: new Date(),
+                closedReason: `Opposite signal - Position reversed (broker error: ${closeError.message})`
+              });
+            }
+
             emitTradeUpdate(targetUserId, existingPosition, 'update');
           }
         }
@@ -1494,11 +1954,13 @@ export const executeTradingViewWebhook = async (req, res) => {
 
       // PAPER MODE: Create paper position with live price for real-time MTM tracking
       if (isPaperMode) {
-        const volume = (strategy.lots || 0.01) * lotsMultiplier;
+        const volume = lotsMultiplier; // Use subscription lots directly, not strategy.lots * lotsMultiplier
         const tradeType = parsedSignal === 'BUY' ? 'Buy' : 'Sell';
         console.log(`📝 PAPER trade for user ${targetUserId}: ${parsedSignal} ${volume} ${symbol}`);
         
-        // DOUBLE CHECK: Close any remaining open positions before creating new one (Race condition safety)
+        // DOUBLE CHECK: Close any remaining OPPOSITE direction positions before creating new one (Race condition safety)
+        // In Multi Leg mode: Only close opposite direction positions, keep same direction open
+        // In Single Leg mode: Close all positions before creating new one
         const anyOpenPositions = await PaperPosition.findAll({
           where: {
             userId: targetUserId,
@@ -1508,43 +1970,152 @@ export const executeTradingViewWebhook = async (req, res) => {
         });
         
         if (anyOpenPositions.length > 0) {
-          console.log(`⚠️ Found ${anyOpenPositions.length} open position(s) - closing before creating new (race condition safety)`);
           for (const openPos of anyOpenPositions) {
-            await openPos.update({
-              status: 'Closed',
-              closeTime: new Date(),
-              closePrice: openPos.currentPrice || openPos.openPrice,
-              realizedProfit: openPos.profit || 0,
-              metadata: {
-                ...openPos.metadata,
-                closedReason: 'Auto-closed before new position (duplicate prevention)',
-                closedBy: 'System Safety Check'
-              }
-            });
-            emitPaperPositionUpdate(targetUserId, openPos, 'update');
+            // In Multi Leg mode, only close OPPOSITE direction positions
+            // In Single Leg mode, close ALL positions
+            const shouldClose = legMode === 'single' || openPos.type !== tradeType;
+            
+            if (shouldClose) {
+              console.log(`⚠️ Closing ${openPos.type} position ID ${openPos.id} (legMode=${legMode}, newType=${tradeType})`);
+              await openPos.update({
+                status: 'Closed',
+                closeTime: new Date(),
+                closePrice: openPos.currentPrice || openPos.openPrice,
+                realizedProfit: openPos.profit || 0,
+                metadata: {
+                  ...openPos.metadata,
+                  closedReason: legMode === 'single' ? 'Auto-closed (Single Leg Mode)' : 'Auto-closed (opposite direction)',
+                  closedBy: 'System Safety Check'
+                }
+              });
+              emitPaperPositionUpdate(targetUserId, openPos, 'update');
+            } else {
+              console.log(`📈 Multi Leg Mode: Keeping ${openPos.type} position ID ${openPos.id} open (same direction)`);
+            }
           }
         }
         
         // Get live MT5 price for realistic paper trading
         let openPrice = null;
-        try {
-          const priceData = await mt5Broker.getPrice(symbol.toUpperCase());
-          // Use ask price for Buy, bid price for Sell (like real broker execution)
-          if (priceData && typeof priceData === 'object') {
-            openPrice = tradeType === 'Buy' ? priceData.ask : priceData.bid;
-            // Fallback to last price if ask/bid not available
-            if (!openPrice) openPrice = priceData.last;
-          } else if (typeof priceData === 'number') {
-            openPrice = priceData;
+        let streamingApiKeyId = null; // API key to use for price streaming
+        let priceSource = 'mt5'; // 'mt5' or 'ccxt'
+        
+        // Determine best API key for streaming based on strategy segment
+        if (strategy.segment === 'Crypto') {
+          // For crypto, find user's crypto API key or fallback to any active crypto API
+          const userCryptoKey = await ApiKey.findOne({
+            where: { userId: targetUserId, segment: 'Crypto', status: 'Active' },
+            order: [['updatedAt', 'DESC']]
+          });
+          
+          if (userCryptoKey && userCryptoKey.exchangeId) {
+            streamingApiKeyId = userCryptoKey.id;
+            priceSource = 'ccxt';
+            
+            // Try to get price from CCXT
+            try {
+              const ccxtModule = await import('ccxt');
+              const ExchangeClass = ccxtModule.default[userCryptoKey.exchangeId];
+              if (ExchangeClass) {
+                const exchange = new ExchangeClass({
+                  apiKey: userCryptoKey.apiKey,
+                  secret: userCryptoKey.apiSecret,
+                  enableRateLimit: true
+                });
+                const ticker = await exchange.fetchTicker(symbol.toUpperCase());
+                openPrice = tradeType === 'Buy' ? ticker.ask : ticker.bid;
+                if (!openPrice) openPrice = ticker.last;
+                console.log(`📈 Got CCXT ${userCryptoKey.exchangeId} price for ${symbol}: ${openPrice} (${tradeType})`);
+              }
+            } catch (ccxtError) {
+              console.log(`⚠️ CCXT price fetch failed for ${symbol}: ${ccxtError.message}`);
+            }
+          } else {
+            // Try global crypto API fallback
+            const globalCryptoKey = await ApiKey.findOne({
+              where: {
+                segment: 'Crypto',
+                status: 'Active',
+                exchangeId: { [Op.ne]: null }
+              },
+              order: [['updatedAt', 'DESC']]
+            });
+            
+            if (globalCryptoKey) {
+              streamingApiKeyId = globalCryptoKey.id;
+              priceSource = 'ccxt';
+              console.log(`📡 Using global crypto API ${globalCryptoKey.id} for paper position streaming`);
+            }
           }
-          console.log(`📈 Got live MT5 price for ${symbol}: ${openPrice} (${tradeType})`);
-        } catch (priceError) {
-          console.log(`⚠️ Could not get live price for ${symbol}, using fallback: ${priceError.message}`);
+        } else {
+          // For forex/indian, find MT5 API key
+          const userMT5Key = await ApiKey.findOne({
+            where: { userId: targetUserId, segment: strategy.segment, broker: 'MT5', status: 'Active' }
+          });
+          
+          if (userMT5Key) {
+            streamingApiKeyId = userMT5Key.id;
+            priceSource = 'mt5';
+          } else {
+            // Try global MT5 API fallback
+            const globalMT5Key = await ApiKey.findOne({
+              where: { broker: 'MT5', status: 'Active' },
+              order: [['updatedAt', 'DESC']]
+            });
+            
+            if (globalMT5Key) {
+              streamingApiKeyId = globalMT5Key.id;
+              priceSource = 'mt5';
+              console.log(`📡 Using global MT5 API ${globalMT5Key.id} for paper position streaming`);
+            }
+          }
         }
         
-        // Fallback to strategy's symbolValue or default
+        // PRIORITY 1: Try centralized streaming service first (most reliable)
         if (!openPrice || isNaN(openPrice)) {
-          openPrice = parseFloat(strategy.symbolValue) || 100;
+          const centralPrice = centralizedStreamingService.getPrice(symbol.toUpperCase());
+          if (centralPrice) {
+            openPrice = tradeType === 'Buy' ? centralPrice.ask : centralPrice.bid;
+            if (!openPrice) openPrice = centralPrice.last || centralPrice.mid;
+            console.log(`📈 Got centralized streaming price for ${symbol}: ${openPrice} (${tradeType})`);
+          }
+        }
+        
+        // PRIORITY 2: Get price from MT5 if not already fetched
+        if (!openPrice || isNaN(openPrice)) {
+          try {
+            const priceData = await mt5Broker.getPrice(symbol.toUpperCase());
+            if (priceData && typeof priceData === 'object') {
+              openPrice = tradeType === 'Buy' ? priceData.ask : priceData.bid;
+              if (!openPrice) openPrice = priceData.last;
+            } else if (typeof priceData === 'number') {
+              openPrice = priceData;
+            }
+            if (openPrice) {
+              console.log(`📈 Got MT5 price for ${symbol}: ${openPrice} (${tradeType})`);
+            }
+          } catch (priceError) {
+            console.log(`⚠️ Could not get MT5 price for ${symbol}: ${priceError.message}`);
+          }
+        }
+        
+        // PRIORITY 3: Fallback to strategy's symbolValue (should have current price)
+        if (!openPrice || isNaN(openPrice)) {
+          openPrice = parseFloat(strategy.symbolValue);
+          if (openPrice) {
+            console.log(`📈 Using strategy symbolValue for ${symbol}: ${openPrice}`);
+          }
+        }
+        
+        // FINAL: If still no price, reject the paper trade - don't use fake price
+        if (!openPrice || isNaN(openPrice) || openPrice <= 0) {
+          console.error(`❌ No price available for ${symbol} - cannot open paper position`);
+          failedTrades.push({
+            userId: targetUserId,
+            error: `No price available for ${symbol}. Please ensure data streaming is active.`,
+            mode: 'paper'
+          });
+          continue; // Skip this trade
         }
         
         // Get SL/TP from strategy's marketRisk if available
@@ -1566,11 +2137,13 @@ export const executeTradingViewWebhook = async (req, res) => {
         const orderId = `PAPER-${Date.now()}-${targetUserId}`;
         
         // Create paper position for live tracking (NO Trade table entry for paper mode)
+        // IMPORTANT: apiKeyId is set for proper price streaming source determination
         const paperPosition = await PaperPosition.create({
           orderId,
           tradeId: null, // Paper positions don't have trade entries
           userId: targetUserId,
           strategyId,
+          apiKeyId: streamingApiKeyId, // API key for price streaming (MT5 or CCXT)
           market: strategy.segment,
           symbol: symbol.toUpperCase(),
           type: tradeType,
@@ -1587,7 +2160,9 @@ export const executeTradingViewWebhook = async (req, res) => {
             source: 'TradingView_Paper',
             tradeMode: 'paper',
             requestIp: req.ip,
-            signal: parsedSignal
+            signal: parsedSignal,
+            priceSource: priceSource, // 'mt5' or 'ccxt'
+            streamingApiKeyId: streamingApiKeyId
           }
         });
 
@@ -1595,6 +2170,8 @@ export const executeTradingViewWebhook = async (req, res) => {
 
         // Emit real-time updates - ONLY emit paper position update, not trade update
         emitPaperPositionUpdate(targetUserId, paperPosition, 'create');
+
+        // NOTE: No per-trade charge for paper trades - only live trades are charged
 
         paperTrades.push({
           userId: targetUserId,
@@ -1678,7 +2255,7 @@ export const executeTradingViewWebhook = async (req, res) => {
           market: strategy.segment,
           symbol: symbol.toUpperCase(),
           type: parsedSignal,
-          amount: (strategy.lots || 0.01) * lotsMultiplier,
+          amount: lotsMultiplier,
           price: 0,
           currentPrice: 0,
           pnl: 0,
@@ -2018,7 +2595,9 @@ export const executeTradingViewWebhook = async (req, res) => {
       // Process successful trade
       try {
         if (tradeResult && tradeResult.success) {
-          // For MT5 only: DOUBLE CHECK: Close any remaining open trades before creating new one (Race condition safety)
+          // For MT5 only: DOUBLE CHECK: Close any remaining OPPOSITE direction trades before creating new one (Race condition safety)
+          // In Multi Leg mode: Only close opposite direction trades, keep same direction open
+          // In Single Leg mode: Close all trades before creating new one
           if (isMT5 && userBroker) {
             const anyOpenTrades = await Trade.findAll({
               where: {
@@ -2028,28 +2607,38 @@ export const executeTradingViewWebhook = async (req, res) => {
               }
             });
             
+            const newTradeType = parsedSignal === 'BUY' ? 'Buy' : 'Sell';
+            
             if (anyOpenTrades.length > 0) {
-              console.log(`⚠️ Found ${anyOpenTrades.length} open trade(s) - closing before creating new (race condition safety)`);
               for (const openTrade of anyOpenTrades) {
-                try {
-                  const closeResult = await userBroker.closeTrade(openTrade.orderId);
-                  await openTrade.update({
-                    status: 'Completed',
-                    currentPrice: closeResult.closePrice || openTrade.price,
-                    pnl: closeResult.profit || 0,
-                    pnlPercentage: closeResult.profitPercent || 0,
-                    brokerStatus: 'CLOSED',
-                    brokerError: null,
-                    brokerResponse: JSON.stringify({ status: 'CLOSED', reason: 'Auto-closed (duplicate prevention)' }),
-                    brokerResponseJson: {
-                      raw: closeResult,
-                      reason: 'System Safety Check',
-                      timestamp: new Date().toISOString()
-                    }
-                  });
-                  emitTradeUpdate(targetUserId, openTrade, 'update');
-                } catch (closeErr) {
-                  console.error(`❌ Failed to close trade ${openTrade.orderId}:`, closeErr.message);
+                // In Multi Leg mode, only close OPPOSITE direction trades
+                // In Single Leg mode, close ALL trades
+                const shouldClose = legMode === 'single' || openTrade.type !== newTradeType;
+                
+                if (shouldClose) {
+                  console.log(`⚠️ Closing ${openTrade.type} trade ID ${openTrade.id} (legMode=${legMode}, newType=${newTradeType})`);
+                  try {
+                    const closeResult = await userBroker.closeTrade(openTrade.orderId);
+                    await openTrade.update({
+                      status: 'Completed',
+                      currentPrice: closeResult.closePrice || openTrade.price,
+                      pnl: closeResult.profit || 0,
+                      pnlPercentage: closeResult.profitPercent || 0,
+                      brokerStatus: 'CLOSED',
+                      brokerError: null,
+                      brokerResponse: JSON.stringify({ status: 'CLOSED', reason: legMode === 'single' ? 'Auto-closed (Single Leg Mode)' : 'Auto-closed (opposite direction)' }),
+                      brokerResponseJson: {
+                        raw: closeResult,
+                        reason: 'System Safety Check',
+                        timestamp: new Date().toISOString()
+                      }
+                    });
+                    emitTradeUpdate(targetUserId, openTrade, 'update');
+                  } catch (closeErr) {
+                    console.error(`❌ Failed to close trade ${openTrade.orderId}:`, closeErr.message);
+                  }
+                } else {
+                  console.log(`📈 Multi Leg Mode: Keeping ${openTrade.type} trade ID ${openTrade.id} open (same direction)`);
                 }
               }
             }
@@ -2065,7 +2654,7 @@ export const executeTradingViewWebhook = async (req, res) => {
             amount: tradeResult.volume || volume,
             price: tradeResult.openPrice,
             currentPrice: tradeResult.openPrice,
-            status: tradeResult.status === 'FILLED' ? 'Completed' : 'Pending',
+            status: tradeResult.status === 'FILLED' ? 'Open' : 'Pending',
             date: new Date(),
             broker: isMT5 ? 'MT5' : (apiKey.exchangeId || apiKey.broker),
             brokerType: isMT5 ? 'MT5' : 'CCXT',
@@ -2095,13 +2684,14 @@ export const executeTradingViewWebhook = async (req, res) => {
 
           console.log(`✅ ${isMT5 ? 'MT5' : 'CCXT'} trade executed for user ${targetUserId}: ${trade.orderId}`);
           
-          // Process admin-defined per-trade charge for subscribers
-          if (!isOwner) {
+          // Process admin-defined per-trade charge for ALL users (including owner) when trade is successfully created
+          // Charge is applied when trade is opened (Open status means successfully executed)
+          if (trade.status === 'Open' || trade.status === 'Pending') {
             const adminCharge = await getAdminPerTradeChargeForStrategy(strategyId);
             if (adminCharge && adminCharge.amount > 0) {
               const chargeResult = await processPerTradeCharge({
                 subscriberId: targetUserId,
-                ownerId: userId, // strategy owner (not credited, just for logging)
+                ownerId: userId, // strategy owner (for logging only)
                 strategyId,
                 tradeId: trade.id,
                 chargeAmount: adminCharge.amount,
@@ -2110,6 +2700,22 @@ export const executeTradingViewWebhook = async (req, res) => {
 
               if (chargeResult.success && !chargeResult.skipped) {
                 console.log(`💰 Admin per-trade charge of ${adminCharge.amount} INR processed for trade ${trade.id}`);
+                
+                // Send notification to user about charge deduction
+                const { Notification } = await import('../models/index.js');
+                await Notification.create({
+                  userId: targetUserId,
+                  type: 'transaction',
+                  title: 'Per-Trade Charge Deducted',
+                  message: `₹${adminCharge.amount} has been deducted from your wallet for strategy: ${strategy.name}`,
+                  data: {
+                    tradeId: trade.id,
+                    strategyId,
+                    amount: adminCharge.amount,
+                    type: 'per_trade_charge'
+                  },
+                  isRead: false
+                });
               } else if (!chargeResult.success) {
                 console.warn(`⚠️ Per-trade charge failed for trade ${trade.id}: ${chargeResult.error}`);
               }
@@ -2199,6 +2805,34 @@ export const executeTradingViewWebhook = async (req, res) => {
     const totalProcessed = executionResults.length + paperCount;
 
     console.log(`📊 Webhook execution summary: ${successCount} live successful, ${paperCount} paper trades, ${failCount} failed out of ${totalProcessed} total`);
+
+    // ========== CREATE SIGNAL LOG ENTRY ==========
+    try {
+      const signalValue = isCloseSignal ? 0 : (parsedSignal === 'BUY' ? 1 : -1);
+      const symbol = customSymbol || strategy.symbol;
+      
+      await SignalLog.create({
+        strategyId: strategy.id,
+        segment: strategy.segment,
+        canonicalSymbol: symbol ? symbol.toUpperCase() : 'UNKNOWN',
+        signal: signalValue,
+        signalId: `${strategy.id}-${Date.now()}`,
+        payloadHash: null,
+        payload: JSON.stringify(req.body),
+        source: 'webhook',
+        usersNotified: totalProcessed,
+        tradesExecuted: successCount + paperCount,
+        success: (successCount + paperCount) > 0,
+        errorMessage: failCount > 0 ? JSON.stringify(executionResults.filter(r => !r.success)) : null,
+        receivedAt: signalReceivedAt
+      });
+
+      console.log(`📝 Signal log created for strategy ${strategy.name}: ${parsedSignal} signal to ${totalProcessed} users`);
+    } catch (logError) {
+      console.error('❌ Failed to create signal log:', logError);
+      // Don't fail the entire request if logging fails
+    }
+    // ==========================================
 
     return res.status(201).json({
       success: true,

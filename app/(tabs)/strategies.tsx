@@ -1,63 +1,65 @@
+import DeployedPositionCard from '@/components/deployed-position-card';
 import { borderRadius, colors, getTheme, shadows, spacing } from '@/constants/styles';
+import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
 import { usePaperPositionUpdates, useStrategyUpdates } from '@/hooks/useWebSocket';
-import { paperPositionService, strategyService, tradeService } from '@/services';
+import { apiKeyService, paperPositionService, strategyBrokerService, strategyService, tradeService } from '@/services';
+import { WS_EVENTS, wsService } from '@/services/websocket';
+import { useFocusEffect } from '@react-navigation/native';
 import * as Clipboard from 'expo-clipboard';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
-  ArrowClockwise,
-  ArrowSquareOut,
-  Bank,
-  CalendarBlank,
-  CaretDown,
-  ChartLineUp,
-  CheckCircle,
-  CheckSquare,
-  Clock,
-  Copy,
-  CurrencyDollar,
-  Eye,
-  FileText,
-  Globe,
-  Info,
-  Lightbulb,
-  Lightning,
-  Link,
-  Lock,
-  MagnifyingGlass,
-  Pause,
-  PencilSimple,
-  Play,
-  Plus,
-  Rocket,
-  SlidersHorizontal,
-  Square,
-  Star,
-  Stop,
-  Storefront,
-  Trash,
-  TrendUp,
-  Users,
-  Warning,
-  X,
-  XCircle
+    ArrowClockwise,
+    Bank,
+    CalendarBlank,
+    CaretDown,
+    ChartLineUp,
+    CheckCircle,
+    CheckSquare,
+    Clock,
+    Copy,
+    CurrencyDollar,
+    Eye,
+    FileText,
+    Globe,
+    Info,
+    Lightbulb,
+    Lightning,
+    Link,
+    Lock,
+    MagnifyingGlass,
+    Pause,
+    PencilSimple,
+    Play,
+    Plus,
+    Rocket,
+    SlidersHorizontal,
+    Square,
+    Stop,
+    Storefront,
+    Trash,
+    TrendUp,
+    Users,
+    Warning,
+    X,
+    XCircle
 } from 'phosphor-react-native';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Animated,
-  Dimensions,
-  Easing,
-  Modal,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View
+    ActivityIndicator,
+    Alert,
+    Animated,
+    Dimensions,
+    Easing,
+    Modal,
+    Platform,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View
 } from 'react-native';
 
 const { width: SCREEN_WIDTH, width } = Dimensions.get('window');
@@ -71,43 +73,29 @@ const TABS = [
 // Stats for Subscribed Strategies tab - will be computed from API data
 const getSubscribedStats = (subscriptions: any[]) => [
   { label: 'Subscribed', value: String(subscriptions.length), icon: Users, color: colors.primary, bgColor: 'rgba(59,130,246,0.04)' },
-  { label: 'Active', value: String(subscriptions.filter(s => s.isActive).length), icon: CheckCircle, color: colors.success, bgColor: 'rgba(16,185,129,0.04)' },
-  { label: 'Total Lots', value: String(subscriptions.reduce((acc, s) => acc + (s.lots || 0), 0)), icon: XCircle, color: '#F59E0B', bgColor: 'rgba(245,158,11,0.04)' },
-  { label: 'Public', value: String(subscriptions.filter(s => s.strategy?.isPublic).length), icon: Globe, color: '#7C3AED', bgColor: 'rgba(124,58,237,0.04)' },
-  { label: 'Private', value: String(subscriptions.filter(s => !s.strategy?.isPublic).length), icon: Lock, color: '#06b6d4', bgColor: 'rgba(6,182,212,0.03)' },
+  { label: 'Active', value: String(subscriptions.filter(s => s.status === 'Active').length), icon: CheckCircle, color: colors.success, bgColor: 'rgba(16,185,129,0.04)' },
+  { label: 'Total Lots', value: Number(subscriptions.reduce((acc, s) => acc + (Number(s.lots) || 0), 0) || 0).toFixed(2), icon: XCircle, color: '#F59E0B', bgColor: 'rgba(245,158,11,0.04)' },
+  { label: 'Public', value: String(subscriptions.filter(s => s.isPublic === true).length), icon: Globe, color: '#7C3AED', bgColor: 'rgba(124,58,237,0.04)' },
+  { label: 'Private', value: String(subscriptions.filter(s => s.isPublic !== true).length), icon: Lock, color: '#06b6d4', bgColor: 'rgba(6,182,212,0.03)' },
 ];
 
 // Stats for My Strategies tab - will be computed from API data
 const getMyStrategiesStats = (strategies: any[]) => [
   { label: 'Total', value: String(strategies.length), icon: Users, color: colors.primary, bgColor: 'rgba(59,130,246,0.04)' },
-  { label: 'Active', value: String(strategies.filter(s => s.isActive).length), icon: CheckCircle, color: colors.success, bgColor: 'rgba(16,185,129,0.04)' },
-  { label: 'Inactive', value: String(strategies.filter(s => !s.isActive).length), icon: XCircle, color: '#ef4444', bgColor: 'rgba(239,68,68,0.04)' },
-  { label: 'Public', value: String(strategies.filter(s => s.isPublic || s.type === 'Public').length), icon: Globe, color: '#7C3AED', bgColor: 'rgba(124,58,237,0.04)' },
-  { label: 'Private', value: String(strategies.filter(s => !s.isPublic && s.type !== 'Public').length), icon: Lock, color: '#06b6d4', bgColor: 'rgba(6,182,212,0.03)' },
+  { label: 'Active', value: String(strategies.filter(s => s.status === 'Active').length), icon: CheckCircle, color: colors.success, bgColor: 'rgba(16,185,129,0.04)' },
+  { label: 'Inactive', value: String(strategies.filter(s => s.status === 'Inactive').length), icon: XCircle, color: '#ef4444', bgColor: 'rgba(239,68,68,0.04)' },
+  { label: 'Public', value: String(strategies.filter(s => s.visibility === 'Public').length), icon: Globe, color: '#7C3AED', bgColor: 'rgba(124,58,237,0.04)' },
+  { label: 'Private', value: String(strategies.filter(s => s.visibility === 'Private').length), icon: Lock, color: '#06b6d4', bgColor: 'rgba(6,182,212,0.03)' },
 ];
 
 // Mock Brokers Data - this should come from API
-const BROKERS_DATA = [
-  {
-    id: 'broker1',
-    name: 'Binance',
-    type: 'Crypto',
-    description: 'Crypto exchange',
-    isConnected: true,
-  },
-  {
-    id: 'broker2',
-    name: 'MT5',
-    type: 'Forex',
-    description: 'Forex trading',
-    isConnected: true,
-  },
-];
+// Connected brokers will be fetched from API
 
 export default function StrategiesScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ tab?: string }>();
   const { isDark } = useTheme();
+  const { user } = useAuth();
   const theme = getTheme(isDark);
   const [activeTab, setActiveTab] = useState(0);
   const [summaryMode, setSummaryMode] = useState<'expiry' | 'today'>('expiry');
@@ -136,6 +124,7 @@ export default function StrategiesScreen() {
   
   // Real-time WebSocket hooks
   useStrategyUpdates((strategy: any) => {
+    console.log('🔄 [Strategies] Strategy update received:', strategy);
     // Update deployed strategies
     setDeployedStrategies(prev => 
       prev.map(s => s.id === strategy.strategyId ? { ...s, ...strategy } : s)
@@ -146,21 +135,99 @@ export default function StrategiesScreen() {
     );
   });
   
-  usePaperPositionUpdates((position: any) => {
-    if (position.positionStatus === 'Open') {
-      setOpenPositions(prev => {
-        const exists = prev.find(p => p.id === position.positionId);
-        if (exists) {
-          return prev.map(p => p.id === position.positionId ? { ...p, ...position } : p);
+  usePaperPositionUpdates((update: any) => {
+    console.log('🔄 [Strategies] Position update received:', {
+      type: update.type,
+      positionId: update.position?.id,
+      currentPrice: update.position?.currentPrice,
+      profit: update.position?.profit,
+      timestamp: new Date().toISOString()
+    });
+    
+    // Handle different types of position updates
+    if (update.type === 'opened') {
+      console.log('✅ [Strategies] New position opened');
+      setOpenPositions(prev => [update.position, ...prev]);
+    } else if (update.type === 'closed' || update.type === 'sl_hit' || update.type === 'tp_hit') {
+      console.log('🔒 [Strategies] Position closed');
+      setOpenPositions(prev => prev.filter(p => p.id !== update.position.id));
+      setClosedPositions(prev => [update.position, ...prev]);
+    } else if (update.type === 'mtm_update' || update.type === 'modified') {
+      console.log('💹 [Strategies] MTM update or modification');
+      // Update position with new MTM values in real-time
+      setOpenPositions(prev => prev.map(p => {
+        if (String(p.id) !== String(update.position.id)) return p;
+        const newP = {
+          ...p,
+          currentPrice: update.position.currentPrice ?? p.currentPrice,
+          profit: update.position.profit ?? p.profit,
+          profitPercent: update.position.profitPercent ?? p.profitPercent,
+          stopLoss: update.position.stopLoss ?? p.stopLoss,
+          takeProfit: update.position.takeProfit ?? p.takeProfit,
+        };
+        if (newP.currentPrice !== p.currentPrice || newP.profit !== p.profit || newP.profitPercent !== p.profitPercent) {
+          console.log('✨ [Strategies] Position value UPDATED:', {
+            id: p.id,
+            symbol: p.symbol,
+            from: { currentPrice: p.currentPrice, profit: p.profit, profitPercent: p.profitPercent },
+            to: { currentPrice: newP.currentPrice, profit: newP.profit, profitPercent: newP.profitPercent }
+          });
         }
-        return [position, ...prev];
-      });
-    } else {
-      // Move to closed
-      setOpenPositions(prev => prev.filter(p => p.id !== position.positionId));
-      setClosedPositions(prev => [position, ...prev]);
+        return newP;
+      }));
     }
   });
+  
+  // Listen for MTM updates (from Redis via WebSocket) to update positions in real-time
+  useEffect(() => {
+    const handleMTMUpdate = (data: any) => {
+      console.log('📊 [Strategies] MTM Update received:', JSON.stringify(data, null, 2));
+      
+      // Handle batch updates
+      if (data.positions && Array.isArray(data.positions)) {
+        console.log(`📊 [Strategies] Batch MTM update for ${data.positions.length} positions`);
+        setOpenPositions(prev => prev.map(p => {
+          const update = data.positions.find((pos: any) => String(pos.id) === String(p.id));
+          if (!update) return p;
+          
+          const newP = {
+            ...p,
+            currentPrice: update.currentPrice ?? p.currentPrice,
+            profit: update.profit ?? p.profit,
+            profitPercent: update.profitPercent ?? p.profitPercent,
+          };
+          
+          if (newP.currentPrice !== p.currentPrice || newP.profit !== p.profit) {
+            console.log('✨ [Strategies] Position updated via BATCH MTM:', {
+              id: p.id,
+              symbol: p.symbol,
+              oldPrice: p.currentPrice,
+              newPrice: newP.currentPrice
+            });
+          }
+          return newP;
+        }));
+      }
+      // Handle single position update
+      else if (data.positionId && data.currentPrice !== undefined) {
+        console.log('📊 [Strategies] Single position MTM update');
+        setOpenPositions(prev => prev.map(p => 
+          String(p.id) === String(data.positionId) ? {
+            ...p,
+            currentPrice: data.currentPrice,
+            profit: data.profit ?? p.profit,
+            profitPercent: data.profitPercent ?? p.profitPercent,
+          } : p
+        ));
+      }
+    };
+    
+    wsService.on(WS_EVENTS.PAPER_MTM_UPDATE, handleMTMUpdate);
+    
+    return () => {
+      wsService.off(WS_EVENTS.PAPER_MTM_UPDATE, handleMTMUpdate);
+    };
+  }, []);
   
   // Deployed tab states
   const [deployedPositionTab, setDeployedPositionTab] = useState<'open' | 'closed'>('open');
@@ -176,6 +243,34 @@ export default function StrategiesScreen() {
   const [selectedPosition, setSelectedPosition] = useState<any>(null);
   const [stopLoss, setStopLoss] = useState('');
   const [takeProfit, setTakeProfit] = useState('');
+
+  // Close position handler for deployed positions
+  const handleClosePosition = async (positionId: number) => {
+    Alert.alert(
+      'Close Position',
+      'Are you sure you want to close this position?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Close',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const result = await paperPositionService.closePosition(positionId);
+              if (result.success) {
+                setOpenPositions(prev => prev.filter(p => p.id !== positionId));
+                if (result.data) setClosedPositions(prev => [result.data!, ...prev]);
+              } else {
+                Alert.alert('Error', result.error || 'Failed to close position');
+              }
+            } catch (err: any) {
+              Alert.alert('Error', err.message || 'Failed to close position');
+            }
+          }
+        }
+      ]
+    );
+  };
   
   // My Strategies tab states
   const [myStrategiesSubTab, setMyStrategiesSubTab] = useState<'subscribed' | 'myStrategies' | 'own'>('subscribed');
@@ -201,6 +296,7 @@ export default function StrategiesScreen() {
   const [showWebhookModal, setShowWebhookModal] = useState(false);
   const [selectedOwnStrategy, setSelectedOwnStrategy] = useState<any>(null);
   const [selectedOwnBrokers, setSelectedOwnBrokers] = useState<string[]>([]);
+  const [connectedBrokers, setConnectedBrokers] = useState<any[]>([]);
   const [ownPauseMessage, setOwnPauseMessage] = useState<string | null>(null);
   
   // Pagination for deployed cards
@@ -241,26 +337,32 @@ export default function StrategiesScreen() {
         subscriptionsRes,
         openPosRes,
         closedPosRes,
+        apiKeysRes,
       ] = await Promise.all([
         strategyService.getStrategies(),
         strategyService.getMarketplaceStrategies(),
         strategyService.getSubscriptions(),
         paperPositionService.getOpenPositions({ limit: 100 }),
         tradeService.getTrades({ status: 'Completed,Failed', limit: 100 }),
+        apiKeyService.getApiKeys({ status: 'Active' }),
       ]);
 
       console.log('Strategies response:', strategiesRes);
       
       if (strategiesRes.success && strategiesRes.data) {
         console.log('Setting own strategies:', strategiesRes.data.length);
+        console.log('📊 Own strategies isPaused values:', strategiesRes.data.map((s: any) => ({ name: s.name, isPaused: s.isPaused })));
         setMyStrategiesList(strategiesRes.data);
         setOwnStrategies(strategiesRes.data.map((s: any) => ({
           id: s.id,
           name: s.name,
           description: s.description || '',
           visibility: s.isPublic ? 'Public' : 'Private',
+          authorId: s.userId || s.user?.id || user?.id,
           status: s.isActive ? 'Active' : 'Inactive',
           stopped: s.isPaused,
+          isPaused: s.isPaused,
+          isStopped: s.isPaused,
           lots: s.lots || 1,
           expiry: 'N/A',
           createdAt: new Date(s.createdAt).toLocaleDateString(),
@@ -268,9 +370,11 @@ export default function StrategiesScreen() {
           segment: s.segment,
           type: 'Intraday',
           capital: `₹${Number(s.capital ?? 0).toFixed(2)}`,
+          rawCapital: s.capital || 10000,
           symbol: s.symbol,
           symbolValue: 'N/A',
           tradeMode: s.tradeMode || 'paper',
+          subscriptionId: s.subscriptionId || null,
           webhookUrl: s.webhookUrl || 'https://app.uptrender.in/api/algo-trades/webhook',
           webhookSecret: s.webhookSecret || '',
         })));
@@ -280,8 +384,10 @@ export default function StrategiesScreen() {
         setMarketplaceStrategies(marketplaceRes.data.map((s: any) => ({
           id: s.id,
           name: s.name,
-          author: s.author?.name || 'User',
+          author: s.author?.name || s.user?.name || 'User',
+          authorId: s.userId || s.user?.id,
           capital: `₹${s.capital?.toLocaleString() || '10,000'}`,
+          rawCapital: s.capital || 10000,
           symbol: s.symbol,
           subscription: s.price > 0 ? `₹${s.price.toLocaleString()}` : 'Free',
           performance: `+${s.performance || 0}%`,
@@ -293,6 +399,7 @@ export default function StrategiesScreen() {
       }
 
       if (subscriptionsRes.success && subscriptionsRes.data) {
+        console.log('📊 Subscribed strategies isPaused values:', subscriptionsRes.data.map((sub: any) => ({ name: sub.strategy?.name, isPaused: sub.isPaused })));
         setSubscriptionsList(subscriptionsRes.data);
         setSubscribedStrategies(subscriptionsRes.data.map((sub: any) => ({
           id: sub.id,
@@ -302,6 +409,8 @@ export default function StrategiesScreen() {
           author: sub.strategy?.author?.name || 'Unknown',
           status: sub.isActive ? 'Active' : 'Inactive',
           isPaused: sub.isPaused,
+          isStopped: sub.isPaused,
+          stopped: sub.isPaused,
           lots: sub.lots,
           expiry: sub.expiryDate ? new Date(sub.expiryDate).toLocaleDateString() : 'N/A',
           subscribedAt: new Date(sub.subscribedAt).toLocaleDateString(),
@@ -310,8 +419,18 @@ export default function StrategiesScreen() {
           capital: `₹${Number(sub.strategy?.capital ?? 0).toFixed(2)}`,
           symbol: sub.strategy?.symbol || 'N/A',
           isPublic: sub.strategy?.isPublic,
-          isStopped: sub.isPaused,
           tradeMode: sub.tradeMode,
+        })));
+      }
+
+      if (apiKeysRes.success && apiKeysRes.data) {
+        setConnectedBrokers(apiKeysRes.data.map((key: any) => ({
+          id: key.id,
+          name: key.broker,
+          type: key.segment,
+          description: key.name || `${key.broker} - ${key.segment}`,
+          isConnected: key.status === 'Active',
+          apiKeyId: key.id,
         })));
       }
 
@@ -325,6 +444,7 @@ export default function StrategiesScreen() {
           ltp: Number(p.currentPrice ?? p.openPrice ?? 0),
           mtm: Number(p.profit ?? 0),
           status: 'Open',
+          tradeMode: 'paper',
           time: new Date(p.openTime || p.createdAt).toLocaleString(),
           strategyName: p.strategy?.name || 'Manual Trade',
           broker: 'Paper Trading',
@@ -365,9 +485,19 @@ export default function StrategiesScreen() {
     fetchData();
   }, [fetchData]);
 
-  const onRefresh = useCallback(() => {
+  // Refetch data when tab comes into focus to sync with changes from other tabs
+  useFocusEffect(
+    useCallback(() => {
+      fetchData();
+    }, [fetchData])
+  );
+
+  const onRefresh = useCallback(async () => {
+    console.log('🔄 [Strategies] Manual refresh triggered');
     setIsRefreshing(true);
-    fetchData();
+    await fetchData();
+    setIsRefreshing(false);
+    console.log('✅ [Strategies] Refresh complete');
   }, [fetchData]);
 
 
@@ -498,6 +628,20 @@ export default function StrategiesScreen() {
   const SEGMENT_OPTIONS = ['All Segments', 'Indian', 'Crypto', 'Forex'];
   const CLOSE_OPTIONS = ['Close All', 'Close Profit', 'Close Loss'];
 
+  // Filter closed positions to show only today's data (after 12am)
+  const filterTodayClosed = (positions: any[]) => {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    
+    return positions.filter(p => {
+      const closeTime = p.closeTime || p.updatedAt || p.createdAt;
+      if (!closeTime) return false;
+      
+      const positionCloseDate = new Date(closeTime);
+      return positionCloseDate >= todayStart;
+    });
+  };
+
   React.useEffect(() => {
     const tabParam = params?.tab as string | undefined;
     if (tabParam) {
@@ -513,7 +657,20 @@ export default function StrategiesScreen() {
   }, [params]);
 
   // Use API data - no more fallback to static data
-  const positions = deployedPositionTab === 'open' ? (openPositions || []) : (closedPositions || []);
+  // Apply today filter for closed positions (after 12am) and segment filter
+  const filterBySegment = (posArray: any[]) => {
+    if (selectedSegment === 'All Segments') return posArray;
+    return posArray.filter(p => {
+      const market = p.market || p.segment;
+      return market && market === selectedSegment.replace(' Segments', '');
+    });
+  };
+
+  const basePositions = deployedPositionTab === 'open' 
+    ? (openPositions || []) 
+    : filterTodayClosed(closedPositions || []);
+  
+  const positions = filterBySegment(basePositions);
 
   // Marketplace filter functions
   const toggleFilter = (category: 'status' | 'type' | 'madeBy' | 'segment', value: string) => {
@@ -538,10 +695,22 @@ export default function StrategiesScreen() {
     // First filter by public/own sub-tab
     let strategiesToFilter = marketplaceStrategies;
     if (marketplaceSubTab === 'public') {
-      strategiesToFilter = marketplaceStrategies.filter(s => s.visibility === 'Public');
+      // Public tab - show only public strategies that are NOT made by the current user
+      strategiesToFilter = marketplaceStrategies.filter(s => s.visibility === 'Public' && s.authorId !== user?.id);
     } else {
-      // 'own' tab - show user's private strategies
-      strategiesToFilter = ownStrategies.filter(s => s.visibility === 'Private' || s.type === 'Private');
+      // 'own' tab - combine user's private/public strategies from ownStrategies
+      // and any public marketplace entries authored by the user (marketplace may not include private strategies)
+      const publicAuthored = marketplaceStrategies.filter(s => s.authorId === user?.id && s.visibility === 'Public');
+      // Merge ownStrategies (which contains user's private strategies from /strategies endpoint)
+      // with any public authored entries returned by marketplace, dedup by id
+      const combined = [...(ownStrategies || []), ...publicAuthored];
+      const seen = new Set();
+      strategiesToFilter = combined.filter(s => {
+        if (!s || !s.id) return false;
+        if (seen.has(s.id)) return false;
+        seen.add(s.id);
+        return true;
+      });
     }
     
     return strategiesToFilter.filter(strategy => {
@@ -630,22 +799,6 @@ export default function StrategiesScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Quick Load More for Open Positions (shows above the list) */}
-      {deployedPositionTab === 'open' && openPositions.length > deployedCardsLimit && (
-        <TouchableOpacity
-          style={styles.loadMoreBtn}
-          onPress={() => setDeployedCardsLimit(prev => prev + 8)}
-        >
-          <LinearGradient
-            colors={isDark ? ['rgba(99, 102, 241, 0.35)', 'rgba(139, 92, 246, 0.25)'] : ['rgba(99, 102, 241, 0.25)', 'rgba(139, 92, 246, 0.18)']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.loadMoreGradient}
-          >
-            <Text style={[styles.loadMoreText, { color: isDark ? '#a5b4fc' : colors.primary }]}>Load More </Text>
-          </LinearGradient>
-        </TouchableOpacity>
-      )}
       {/* Filters */}
       <View style={styles.filterRow}>
         <TouchableOpacity 
@@ -775,173 +928,36 @@ export default function StrategiesScreen() {
         ) : (
           <>
             {positions.slice(0, deployedCardsLimit).map((position) => (
-              <TouchableOpacity 
-            key={position.id}
-            style={[styles.positionCard, { 
-              backgroundColor: isDark ? 'rgba(10, 10, 26, 0.7)' : '#FFFFFF',
-              borderColor: isDark ? 'rgba(71, 85, 105, 0.3)' : '#e2e8f0'
-            }]}
-            onPress={() => {
-              router.push(`/open-trade-detail?id=${position.id}`);
-            }}
-            activeOpacity={0.7}
-          >
-            {/* Position Header with MTM and Badges */}
-            <View style={styles.positionHeader}>
-              <View style={styles.headerLeft}>
-                {/* Buy/Sell Glassy Badge */}
-                <LinearGradient
-                  colors={position.type === 'Buy' 
-                    ? ['rgba(16, 185, 129, 0.12)', 'rgba(16, 185, 129, 0.06)'] 
-                    : ['rgba(239, 68, 68, 0.25)', 'rgba(239, 68, 68, 0.15)']}
-                  style={[styles.typeBadgeGlassy]}
-                >
-                  <Text style={[styles.typeBadgeText, { color: position.type === 'Buy' ? colors.success : colors.error }]}>
-                    {position.type === 'Buy' ? 'B' : 'S'}
-                  </Text>
-                </LinearGradient>
-                <View style={styles.symbolSection}>
-                  <View style={styles.symbolRow}>
-                    <Text style={[styles.positionSymbol, { color: theme.text }]}>{position.symbol}</Text>
-                    {deployedPositionTab === 'open' && (
-                      <View style={[styles.chevronIcon, {
-                        backgroundColor: isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(37, 99, 235, 0.1)',
-                      }]}>
-                        <ArrowSquareOut size={12} color={colors.primary} weight="bold" />
-                      </View>
-                    )}
-                    {deployedPositionTab === 'closed' && (
-                      <TouchableOpacity
-                        style={[styles.infoIconInline, {
-                          backgroundColor: isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(37, 99, 235, 0.1)',
-                        }]}
-                        onPress={(e) => {
-                          e.stopPropagation();
-                          router.push(`/close-trade-detail?id=${position.id}`);
-                        }}
-                      >
-                        <Info size={12} color={colors.primary} weight="bold" />
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                  <View style={styles.timeRow}>
-                    <Clock size={10} color={theme.textSecondary} weight="bold" />
-                    <Text style={[styles.positionTime, { color: theme.textSecondary }]}>{position.time}</Text>
-                  </View>
-                  {position.strategyName ? (
-                    <Text style={[styles.positionStrategyName, { color: theme.textSecondary }]} numberOfLines={1}>
-                      {position.strategyName}
-                    </Text>
-                  ) : null}
-                </View>
-              </View>
-              <View style={styles.headerRight}>
-                {/* MTM Value */}
-                <Text style={[styles.mtmValue, { color: position.mtm >= 0 ? colors.success : colors.error }]}>
-                  {position.mtm >= 0 ? '+' : ''}{Number(position.mtm ?? 0).toFixed(2)} USD
-                </Text>
-                {/* Status Badge */}
-                <LinearGradient
-                  colors={
-                    deployedPositionTab === 'open' 
-                      ? ['rgba(245, 158, 11, 0.25)', 'rgba(245, 158, 11, 0.15)']
-                      : (['Completed', 'Closed'].includes(position.status as any))
-                        ? ['rgba(16, 185, 129, 0.12)', 'rgba(16, 185, 129, 0.06)']
-                        : ['rgba(239, 68, 68, 0.25)', 'rgba(239, 68, 68, 0.15)']
-                  }
-                  style={styles.statusBadgeGlassy}
-                >
-                  <Text style={[styles.statusBadgeText, { 
-                    color: deployedPositionTab === 'open' 
-                      ? '#F59E0B' 
-                      : (['Completed', 'Closed'].includes(position.status as any)) 
-                        ? colors.success 
-                        : colors.error 
-                  }]}>
-                    {position.status}
-                  </Text>
-                </LinearGradient>
-              </View>
-            </View>
-
-            {/* Position Details - Single Row */}
-            <View style={[styles.positionDetailsRow, { 
-              backgroundColor: isDark ? 'rgba(15, 23, 42, 0.6)' : '#f8fafc',
-            }]}>
-              <View style={styles.detailItem}>
-                <Text style={[styles.detailLabel, { color: theme.textSecondary }]}>Volume</Text>
-                <Text style={[styles.detailValue, { color: theme.text }]}>{Number(position.qty ?? 0).toFixed(4)}</Text>
-              </View>
-              <View style={[styles.detailDivider, { backgroundColor: isDark ? 'rgba(71, 85, 105, 0.4)' : 'rgba(203, 213, 225, 0.6)' }]} />
-              <View style={styles.detailItem}>
-                <Text style={[styles.detailLabel, { color: theme.textSecondary }]}>Entry Price</Text>
-                <Text style={[styles.detailValue, { color: theme.text }]}>{Number(position.entryPrice ?? 0).toFixed(4)}</Text>
-              </View>
-              <View style={[styles.detailDivider, { backgroundColor: isDark ? 'rgba(71, 85, 105, 0.4)' : 'rgba(203, 213, 225, 0.6)' }]} />
-              <View style={styles.detailItem}>
-                <Text style={[styles.detailLabel, { color: theme.textSecondary }]}>
-                  {deployedPositionTab === 'open' ? 'Current Price' : 'Exit Price'}
-                </Text>
-                <Text style={[styles.detailValue, { color: theme.text }]}>
-                  {deployedPositionTab === 'open' 
-                    ? ('ltp' in position ? Number(position.ltp ?? 0).toFixed(5) : '0.00000')
-                    : ('exitPrice' in position ? Number(position.exitPrice ?? 0).toFixed(4) : '0.0000')
-                  }
-                </Text>
-              </View>
-            </View>
-
-            {/* Action Buttons - Conditional for Open/Closed */}
-            {deployedPositionTab === 'open' ? (
-              <View style={styles.positionActions}>
-                <TouchableOpacity 
-                  style={[styles.tpSlButton, { 
-                    backgroundColor: isDark ? 'rgba(10, 10, 26, 0.8)' : 'rgba(241, 245, 249, 0.9)',
-                    borderColor: isDark ? 'rgba(71, 85, 105, 0.5)' : 'rgba(203, 213, 225, 0.8)',
-                  }]}
-                  onPress={() => {
-                    setSelectedPosition(position);
-                    setShowSLTPModal(true);
-                  }}
-                >
-                  <Text style={[styles.tpSlText, { color: theme.text }]}>TP/SL</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.closeButton}>
-                  <LinearGradient
-                    colors={['#EF4444', '#DC2626']}
-                    style={styles.closeButtonGradient}
-                  >
-                    <Lightning size={14} color="#fff" weight="fill" />
-                    <Text style={styles.closeButtonText}>Close</Text>
-                  </LinearGradient>
-                </TouchableOpacity>
-              </View>
-            ) : (
-              <View style={styles.positionActions} />
-            )}
-          </TouchableOpacity>
+              <DeployedPositionCard
+                key={position.id}
+                position={position}
+                onPress={() => router.push(`/open-trade-detail?id=${position.id}`)}
+                onTP={() => { setSelectedPosition(position); setShowSLTPModal(true); }}
+                onClose={() => handleClosePosition(position.id)}
+              />
             ))}
             
-            {/* Load More Button */}
-            {positions.length > deployedCardsLimit && (
-              <TouchableOpacity
-                style={styles.loadMoreBtn}
-                onPress={() => setDeployedCardsLimit(prev => prev + 8)}
-              >
-                <LinearGradient
-                  colors={isDark ? ['rgba(99, 102, 241, 0.35)', 'rgba(139, 92, 246, 0.25)', 'rgba(59, 130, 246, 0.2)'] : ['rgba(99, 102, 241, 0.25)', 'rgba(139, 92, 246, 0.18)', 'rgba(59, 130, 246, 0.12)']}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={styles.loadMoreGradient}
-                >
-                  <Text style={[styles.loadMoreText, { color: isDark ? '#a5b4fc' : colors.primary }]}>Load More</Text>
-                  {/* <CaretDown size={16} color={isDark ? '#a5b4fc' : colors.primary} weight="bold" /> */}
-                </LinearGradient>
-              </TouchableOpacity>
-            )}
+            {/* Card-style Load More removed — using compact Load More above the list */}
           </>
         )}
       </View>
+
+      {/* Compact Load More (moved below cards) */}
+      {positions.length > deployedCardsLimit && (
+        <TouchableOpacity
+          style={styles.loadMoreBtn}
+          onPress={() => setDeployedCardsLimit(prev => prev + 8)}
+        >
+          <LinearGradient
+            colors={isDark ? ['rgba(99, 102, 241, 0.35)', 'rgba(139, 92, 246, 0.25)'] : ['rgba(99, 102, 241, 0.25)', 'rgba(139, 92, 246, 0.18)']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.loadMoreGradient}
+          >
+            <Text style={[styles.loadMoreText, { color: isDark ? '#a5b4fc' : colors.primary }]}>Load More</Text>
+          </LinearGradient>
+        </TouchableOpacity>
+      )}
 
       {/* SL/TP Modal */}
       <Modal
@@ -1173,7 +1189,7 @@ export default function StrategiesScreen() {
       const newPausedState = !strategy.isPaused;
       // Optimistic update
       setSubscribedStrategies(prev => prev.map(s => 
-        s.id === strategy.id ? { ...s, isPaused: newPausedState } : s
+        s.id === strategy.id ? { ...s, isPaused: newPausedState, isStopped: newPausedState, stopped: newPausedState } : s
       ));
       
       try {
@@ -1187,9 +1203,9 @@ export default function StrategiesScreen() {
       } catch (error: any) {
         // Revert on error
         setSubscribedStrategies(prev => prev.map(s => 
-          s.id === strategy.id ? { ...s, isPaused: !newPausedState } : s
+          s.id === strategy.id ? { ...s, isPaused: !newPausedState, isStopped: !newPausedState, stopped: !newPausedState } : s
         ));
-        Alert.alert('Error', error.message || 'Failed to toggle pause status');
+        console.error('❌ Failed to toggle pause:', error);
       }
     };
 
@@ -1197,7 +1213,6 @@ export default function StrategiesScreen() {
       setSelectedStrategy(strategy);
       setShowUnsubscribeModal(true);
     };
-
     const confirmUnsubscribe = async () => {
       if (!selectedStrategy) return;
       try {
@@ -1219,8 +1234,40 @@ export default function StrategiesScreen() {
       }
     };
 
-    const handleSelectBrokers = (strategy: any) => {
+    const handleSelectBrokers = async (strategy: any) => {
       setSelectedStrategy(strategy);
+      // Load current brokers for this subscription or strategy
+      try {
+        // If this item represents a subscription (has an id and strategyId), use subscription endpoints
+        if (strategy && strategy.id && strategy.strategyId) {
+          const res = await strategyService.getSubscriptionBrokers(strategy.id);
+          if (res.success && res.data) {
+            // res.data already includes selection info; normalize connectedBrokers and selectedBrokers
+            setConnectedBrokers(res.data.map((b: any) => ({
+              id: b.id,
+              name: b.broker || b.accountName || 'Broker',
+              type: b.segment,
+              description: b.accountName || '',
+              isConnected: !!b.isConnected,
+              apiKeyId: b.id,
+            })));
+            setSelectedBrokers(res.data.filter((b: any) => b.isSelected).map((b: any) => String(b.id)));
+          } else {
+            setSelectedBrokers([]);
+          }
+        } else {
+          // Fallback: load strategy-level brokers (for owner's strategies)
+          const response = await strategyBrokerService.getStrategyBrokers(strategy.strategyId || strategy.id);
+          if (response.success && response.data) {
+            setSelectedBrokers(response.data.map((sb: any) => String(sb.apiKeyId)));
+          } else {
+            setSelectedBrokers([]);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to load strategy/subscription brokers:', error);
+        setSelectedBrokers([]);
+      }
       setShowBrokersModal(true);
     };
 
@@ -1238,16 +1285,42 @@ export default function StrategiesScreen() {
       setShowTradeModeModal(true);
     };
 
-    const confirmTradeMode = (mode: 'paper' | 'live') => {
+    const confirmTradeMode = async (mode: 'paper' | 'live') => {
+      if (!selectedStrategy) return;
+      
+      const subscriptionId = selectedStrategy.id;
+      const previousMode = selectedStrategy.tradeMode;
+      
+      // Optimistic UI update
       setSelectedTradeMode(mode);
-      // persist selection to subscribedStrategies list
-      if (selectedStrategy) {
-        setSubscribedStrategies(prev => prev.map(s => s.id === selectedStrategy.id ? { ...s, tradeMode: mode } : s));
-        setSelectedStrategy((prev: any) => prev ? { ...prev, tradeMode: mode } : prev);
+      setSubscribedStrategies(prev => prev.map(s => 
+        s.id === subscriptionId ? { ...s, tradeMode: mode } : s
+      ));
+      setSelectedStrategy((prev: any) => prev ? { ...prev, tradeMode: mode } : prev);
+      
+      try {
+        const response = await strategyService.setTradeMode(subscriptionId, mode);
+        
+        if (response.success) {
+          const modeLabel = mode === 'paper' ? 'Paper Trading' : 'Live Trading';
+          Alert.alert('Success', response.message || `${modeLabel} mode set for ${selectedStrategy?.name}`);
+          setShowTradeModeModal(false);
+          // Refresh subscriptions to get updated data
+          await fetchData();
+        } else {
+          throw new Error(response.error || 'Failed to set trade mode');
+        }
+      } catch (error: any) {
+        // Revert on error
+        setSubscribedStrategies(prev => prev.map(s => 
+          s.id === subscriptionId ? { ...s, tradeMode: previousMode } : s
+        ));
+        setSelectedStrategy((prev: any) => prev ? { ...prev, tradeMode: previousMode } : prev);
+        setSelectedTradeMode(previousMode);
+        
+        console.error('Set trade mode error:', error);
+        Alert.alert('Error', error.message || 'Failed to set trade mode');
       }
-      const modeLabel = mode === 'paper' ? 'Paper Trading' : 'Live Trading';
-      Alert.alert('Success', `${modeLabel} mode set for ${selectedStrategy?.name}`);
-      setShowTradeModeModal(false);
     };
 
     // --- My Own Strategies Handlers ---
@@ -1266,7 +1339,8 @@ export default function StrategiesScreen() {
       try {
         const response = await strategyService.updateStrategy(strategy.id, { isActive: newActiveState });
         if (response.success) {
-          // Success - no alert needed for quick toggle
+          // Refresh data to ensure sync with backend
+          await fetchData();
         } else {
           throw new Error(response.error || 'Failed to toggle active status');
         }
@@ -1283,7 +1357,7 @@ export default function StrategiesScreen() {
       const newPausedState = !strategy.stopped;
       // Optimistic update
       setOwnStrategies((prev: any) => prev.map((s: any) => 
-        s.id === strategy.id ? { ...s, stopped: newPausedState } : s
+        s.id === strategy.id ? { ...s, stopped: newPausedState, isPaused: newPausedState, isStopped: newPausedState } : s
       ));
       
       try {
@@ -1291,15 +1365,18 @@ export default function StrategiesScreen() {
         if (response.success) {
           setOwnPauseMessage(newPausedState ? 'Strategy paused successfully' : 'Strategy resumed successfully');
           setTimeout(() => setOwnPauseMessage(null), 3000);
+          // Refresh data to ensure sync with backend
+          await fetchData();
         } else {
           throw new Error(response.error || 'Failed to toggle pause');
         }
       } catch (error: any) {
         // Revert on error
         setOwnStrategies((prev: any) => prev.map((s: any) => 
-          s.id === strategy.id ? { ...s, stopped: !newPausedState } : s
+          s.id === strategy.id ? { ...s, stopped: !newPausedState, isPaused: !newPausedState, isStopped: !newPausedState } : s
         ));
         Alert.alert('Error', error.message || 'Failed to toggle pause status');
+        console.error('❌ Failed to toggle pause:', error);
       }
     };
 
@@ -1319,27 +1396,62 @@ export default function StrategiesScreen() {
       setShowOwnEditModal(true);
     };
 
-    const handleSaveEdit = () => {
-      if (selectedOwnStrategy) {
-        setOwnStrategies((prev: any) => prev.map((s: any) => {
-          if (s.id === selectedOwnStrategy.id) {
-            return {
-              ...s,
-              name: editName,
-              segment: editSegment,
-              type: editType,
-              capital: '₹' + editCapital,
-              symbol: editSymbol,
-              symbolValue: editSymbolValue,
-              description: editDescription,
-              status: editIsActive ? 'Active' : 'Paused',
-              visibility: editIsPublic ? 'Public' : 'Private',
-            };
-          }
-          return s;
-        }));
-        setShowOwnEditModal(false);
-        setSelectedOwnStrategy(null);
+    const handleSaveEdit = async () => {
+      if (!selectedOwnStrategy) return;
+      
+      // Optimistic UI update
+      const updatedStrategy = {
+        ...selectedOwnStrategy,
+        name: editName,
+        segment: editSegment,
+        type: editType,
+        capital: '₹' + editCapital,
+        symbol: editSymbol,
+        symbolValue: editSymbolValue,
+        description: editDescription,
+        status: editIsActive ? 'Active' : 'Inactive',
+        visibility: editIsPublic ? 'Public' : 'Private',
+      };
+      
+      setOwnStrategies((prev: any) => prev.map((s: any) => 
+        s.id === selectedOwnStrategy.id ? updatedStrategy : s
+      ));
+      
+      try {
+        const segmentMap: Record<string, 'Forex' | 'Crypto' | 'Indian'> = {
+          'Forex': 'Forex',
+          'Crypto': 'Crypto',
+          'Indian': 'Indian',
+          'Indian Market': 'Indian',
+          'Cryptocurrency': 'Crypto',
+        };
+        
+        const response = await strategyService.updateStrategy(selectedOwnStrategy.id, {
+          name: editName,
+          segment: segmentMap[editSegment] || 'Forex',
+          capital: parseFloat(editCapital) || 10000,
+          symbol: editSymbol,
+          lots: parseFloat(editNumberValue) || 1,
+          description: editDescription,
+          isActive: editIsActive,
+          isPublic: editIsPublic,
+        });
+        
+        if (response.success) {
+          Alert.alert('Success', 'Strategy updated successfully');
+          setShowOwnEditModal(false);
+          setSelectedOwnStrategy(null);
+          // Refresh data to get updated values from backend
+          await fetchData();
+        } else {
+          throw new Error(response.error || 'Failed to update strategy');
+        }
+      } catch (error: any) {
+        // Revert on error
+        setOwnStrategies((prev: any) => prev.map((s: any) => 
+          s.id === selectedOwnStrategy.id ? selectedOwnStrategy : s
+        ));
+        Alert.alert('Error', error.message || 'Failed to update strategy');
       }
     };
 
@@ -1349,22 +1461,40 @@ export default function StrategiesScreen() {
     };
 
     const confirmOwnDelete = async () => {
-      if (selectedOwnStrategy) {
-        try {
-          await strategyService.deleteStrategy(selectedOwnStrategy.id);
+      if (!selectedOwnStrategy) return;
+      
+      try {
+        const response = await strategyService.deleteStrategy(selectedOwnStrategy.id);
+        if (response.success) {
           setOwnStrategies((prev: any) => prev.filter((s: any) => s.id !== selectedOwnStrategy.id));
           setShowOwnDeleteModal(false);
           setSelectedOwnStrategy(null);
-        } catch (error) {
-          console.error('Failed to delete strategy:', error);
-          Alert.alert('Error', 'Failed to delete strategy. Please try again.');
+          Alert.alert('Success', 'Strategy deleted successfully');
+          // Refresh data to sync with backend
+          await fetchData();
+        } else {
+          throw new Error(response.error || 'Failed to delete strategy');
         }
+      } catch (error: any) {
+        console.error('Failed to delete strategy:', error);
+        Alert.alert('Error', error.message || 'Failed to delete strategy. Please try again.');
       }
     };
 
-    const handleOwnSelectBrokers = (strategy: any) => {
+    const handleOwnSelectBrokers = async (strategy: any) => {
       setSelectedOwnStrategy(strategy);
-      setSelectedOwnBrokers([]);
+      // Load current brokers for this strategy
+      try {
+        const response = await strategyBrokerService.getStrategyBrokers(strategy.id);
+        if (response.success && response.data) {
+          setSelectedOwnBrokers(response.data.map((sb: any) => String(sb.apiKeyId)));
+        } else {
+          setSelectedOwnBrokers([]);
+        }
+      } catch (error) {
+        console.error('Failed to load strategy brokers:', error);
+        setSelectedOwnBrokers([]);
+      }
       setShowOwnBrokersModal(true);
     };
 
@@ -1377,10 +1507,10 @@ export default function StrategiesScreen() {
     };
 
     const selectAllBrokers = () => {
-      if (selectedOwnBrokers.length === BROKERS_DATA.length) {
+      if (selectedOwnBrokers.length === connectedBrokers.length) {
         setSelectedOwnBrokers([]);
       } else {
-        setSelectedOwnBrokers(BROKERS_DATA.map(b => b.id));
+        setSelectedOwnBrokers(connectedBrokers.map(b => String(b.id)));
       }
     };
 
@@ -1389,14 +1519,51 @@ export default function StrategiesScreen() {
       setShowOwnTradeModeModal(true);
     };
 
-    const confirmOwnTradeMode = (mode: 'paper' | 'live') => {
-      if (selectedOwnStrategy) {
-        setOwnStrategies((prev: any) => prev.map((s: any) => s.id === selectedOwnStrategy.id ? { ...s, tradeMode: mode } : s));
-        setSelectedOwnStrategy((prev: any) => prev ? { ...prev, tradeMode: mode } : prev);
+    const confirmOwnTradeMode = async (mode: 'paper' | 'live') => {
+      if (!selectedOwnStrategy) return;
+      
+      const previousMode = selectedOwnStrategy.tradeMode;
+      
+      // Optimistic UI update
+      setOwnStrategies((prev: any) => prev.map((s: any) => s.id === selectedOwnStrategy.id ? { ...s, tradeMode: mode } : s));
+      setSelectedOwnStrategy((prev: any) => prev ? { ...prev, tradeMode: mode } : prev);
+      
+      try {
+        console.log(`[TradeMode] Updating strategy ${selectedOwnStrategy.id} to ${mode}`);
+
+        const subscriptionId = (selectedOwnStrategy as any).subscriptionId || null;
+        let response;
+
+        if (subscriptionId) {
+          // Update the owner's subscription trade mode
+          response = await strategyService.setTradeMode(subscriptionId, mode);
+        } else {
+          // Fallback: update strategy record (older strategies may not have subscription)
+          response = await strategyService.updateStrategy(selectedOwnStrategy.id, { tradeMode: mode });
+        }
+
+        console.log(`[TradeMode] API Response:`, response);
+
+        if (response.success) {
+          const modeLabel = mode === 'paper' ? 'Paper Trading' : 'Live Trading';
+          Alert.alert('Success', `${modeLabel} mode set for ${selectedOwnStrategy?.name}`);
+          setShowOwnTradeModeModal(false);
+          // Refresh data from backend to ensure sync
+          await fetchData();
+        } else {
+          throw new Error(response.error || 'Failed to update trade mode');
+        }
+      } catch (error: any) {
+        console.log(`[TradeMode] Error:`, error);
+        // Revert on error to previous mode
+        setOwnStrategies((prev: any) => prev.map((s: any) => 
+          s.id === selectedOwnStrategy.id 
+            ? { ...s, tradeMode: previousMode } 
+            : s
+        ));
+        setSelectedOwnStrategy((prev: any) => prev ? { ...prev, tradeMode: previousMode } : prev);
+        Alert.alert('Error', error.message || 'Failed to update trade mode');
       }
-      const modeLabel = mode === 'paper' ? 'Paper Trading' : 'Live Trading';
-      Alert.alert('Success', `${modeLabel} mode set for ${selectedOwnStrategy?.name}`);
-      setShowOwnTradeModeModal(false);
     };
 
     const handleOwnWebhook = (strategy: any) => {
@@ -1410,16 +1577,18 @@ export default function StrategiesScreen() {
     };
 
     // Handle Close All confirmation
-    const handleCloseAllConfirm = () => {
+    const handleCloseAllConfirm = async () => {
       const newPausedState = !allStrategiesPaused;
+      console.log('🔄 Pause All clicked - Current state:', allStrategiesPaused, 'New state:', newPausedState);
+      console.log('📊 Subscribed strategies count:', subscribedStrategies.length);
+      console.log('📊 Own strategies count:', ownStrategies.length);
       
-      // Update subscribed strategies - toggle isPaused field
+      // Optimistically update UI
       setSubscribedStrategies((prev: any) => prev.map((s: any) => ({
         ...s,
         isPaused: newPausedState,
       })));
       
-      // Update own strategies - toggle stopped field
       setOwnStrategies((prev: any) => prev.map((s: any) => ({
         ...s,
         stopped: newPausedState,
@@ -1428,13 +1597,52 @@ export default function StrategiesScreen() {
       setAllStrategiesPaused(newPausedState);
       setShowCloseAllModal(false);
       
-      const message = newPausedState ? 'All strategies paused successfully' : 'All strategies resumed successfully';
-      if (myStrategiesSubTab === 'subscribed') {
-        setPauseMessage(message);
-        setTimeout(() => setPauseMessage(null), 3000);
-      } else {
-        setOwnPauseMessage(message);
-        setTimeout(() => setOwnPauseMessage(null), 3000);
+      try {
+        // Update subscribed strategies via API
+        const subscribedPromises = subscribedStrategies.map(async (strategy: any) => {
+          try {
+            console.log(`🔄 Toggling subscription ${strategy.id} (${strategy.name}), current isPaused: ${strategy.isPaused}, new: ${newPausedState}`);
+            if (strategy.isPaused !== newPausedState) {
+              const result = await strategyService.toggleSubscriptionPause(strategy.id);
+              console.log(`✅ Subscription ${strategy.id} toggled:`, result);
+            } else {
+              console.log(`⏭️  Skipping subscription ${strategy.id} - already in desired state`);
+            }
+          } catch (error) {
+            console.error(`❌ Failed to toggle subscription ${strategy.id}:`, error);
+          }
+        });
+        
+        // Update own strategies via API
+        const ownPromises = ownStrategies.map(async (strategy: any) => {
+          try {
+            console.log(`🔄 Toggling own strategy ${strategy.id} (${strategy.name}), current stopped: ${strategy.stopped}, new: ${newPausedState}`);
+            if (strategy.stopped !== newPausedState) {
+              const result = await strategyService.updateStrategy(strategy.id, { isPaused: newPausedState });
+              console.log(`✅ Own strategy ${strategy.id} toggled:`, result);
+            } else {
+              console.log(`⏭️  Skipping own strategy ${strategy.id} - already in desired state`);
+            }
+          } catch (error) {
+            console.error(`❌ Failed to toggle strategy ${strategy.id}:`, error);
+          }
+        });
+
+        await Promise.all([...subscribedPromises, ...ownPromises]);
+        
+        const message = newPausedState ? 'All strategies paused successfully' : 'All strategies resumed successfully';
+        if (myStrategiesSubTab === 'subscribed') {
+          setPauseMessage(message);
+          setTimeout(() => setPauseMessage(null), 3000);
+        } else {
+          setOwnPauseMessage(message);
+          setTimeout(() => setOwnPauseMessage(null), 3000);
+        }
+      } catch (error: any) {
+        console.error('Error toggling all strategies:', error);
+        Alert.alert('Error', 'Some strategies failed to update. Please try again.');
+        // Revert optimistic update on error
+        fetchData();
       }
     };
 
@@ -1539,7 +1747,9 @@ export default function StrategiesScreen() {
             </View>
           ) : (
             <>
-            {filteredSubscribed.slice(0, subscribedVisibleCount).map((strategy, index) => (
+            {filteredSubscribed.slice(0, subscribedVisibleCount).map((strategy, index) => {
+              console.log(`🔎 Render Subscribed: ${strategy.name} isPaused=${strategy.isPaused} tradeMode=${strategy.tradeMode}`);
+              return (
             <View
               key={strategy.id}
               style={[styles.strategyListItem, {
@@ -1582,10 +1792,10 @@ export default function StrategiesScreen() {
                   <Eye size={14} color={colors.primary} weight="bold" />
                 </TouchableOpacity>
                 <TouchableOpacity 
-                  style={[styles.strategyActionBtn, { backgroundColor: strategy.isPaused ? colors.success : colors.primary }]}
+                  style={[styles.strategyActionBtn, { backgroundColor: (strategy.isPaused || strategy.isStopped || strategy.stopped) ? colors.success : colors.primary }]}
                   onPress={() => handlePauseResume(strategy)}
                 >
-                  {strategy.isPaused ? (
+                  { (strategy.isPaused || strategy.isStopped || strategy.stopped) ? (
                     <Play size={14} color="#fff" weight="bold" />
                   ) : (
                     <Pause size={14} color="#fff" weight="bold" />
@@ -1618,7 +1828,8 @@ export default function StrategiesScreen() {
                 </TouchableOpacity>
               </View>
             </View>
-          ))}
+          );
+            })}
             {/* Load More Button for Subscribed */}
             {filteredSubscribed.length > subscribedVisibleCount && (
               <TouchableOpacity
@@ -1652,7 +1863,9 @@ export default function StrategiesScreen() {
             </View>
           ) : (
             <>
-            {filteredOwn.slice(0, myStrategiesVisibleCount).map((strategy, index) => (
+            {filteredOwn.slice(0, myStrategiesVisibleCount).map((strategy, index) => {
+              console.log(`🔎 Render Own: ${strategy.name} stopped=${strategy.stopped} tradeMode=${strategy.tradeMode}`);
+              return (
             <View
               key={strategy.id}
               style={[styles.strategyListItem, {
@@ -1703,10 +1916,10 @@ export default function StrategiesScreen() {
                   <PencilSimple size={14} color={colors.primary} weight="bold" />
                 </TouchableOpacity>
                 <TouchableOpacity 
-                  style={[styles.strategyActionBtn, { backgroundColor: strategy.stopped ? colors.success : colors.primary }]}
+                  style={[styles.strategyActionBtn, { backgroundColor: (strategy.stopped || strategy.isPaused || strategy.isStopped) ? colors.success : colors.primary }]}
                   onPress={() => handleOwnPauseResume(strategy)}
                 >
-                  {strategy.stopped ? (
+                  {(strategy.stopped || strategy.isPaused || strategy.isStopped) ? (
                     <Play size={14} color="#fff" weight="bold" />
                   ) : (
                     <Pause size={14} color="#fff" weight="bold" />
@@ -1733,7 +1946,8 @@ export default function StrategiesScreen() {
                 </TouchableOpacity>
               </View>
             </View>
-          ))}
+          );
+            })}
             {/* Load More Button for My Strategies */}
             {filteredOwn.length > myStrategiesVisibleCount && (
               <TouchableOpacity
@@ -2004,8 +2218,8 @@ export default function StrategiesScreen() {
             </Text>
 
             <ScrollView style={styles.brokersList}>
-              {BROKERS_DATA.map((broker) => {
-                const isSelected = selectedBrokers.includes(broker.id);
+              {connectedBrokers.map((broker) => {
+                const isSelected = selectedBrokers.includes(String(broker.id));
                 return (
                   <TouchableOpacity
                     key={broker.id}
@@ -2016,7 +2230,7 @@ export default function StrategiesScreen() {
                         borderColor: isSelected ? colors.primary : theme.border,
                       }
                     ]}
-                    onPress={() => toggleBrokerSelection(broker.id)}
+                    onPress={() => toggleBrokerSelection(String(broker.id))}
                   >
                     <View style={[
                       styles.brokerCheckbox,
@@ -2053,9 +2267,29 @@ export default function StrategiesScreen() {
               </TouchableOpacity>
               <TouchableOpacity 
                 style={[styles.brokersSaveBtn, { backgroundColor: colors.primary }]}
-                onPress={() => {
-                  Alert.alert('Success', 'Broker selection saved successfully');
-                  setShowBrokersModal(false);
+                onPress={async () => {
+                  if (!selectedStrategy) return;
+                  try {
+                    const apiKeyIds = selectedBrokers.map(id => Number(id));
+                    let response;
+                    // If this modal was opened for a subscription, call subscription brokers update
+                    if (selectedStrategy && selectedStrategy.id && selectedStrategy.strategyId) {
+                      response = await strategyService.updateSubscriptionBrokers(selectedStrategy.id, apiKeyIds);
+                    } else {
+                      const strategyId = selectedStrategy.strategyId || selectedStrategy.id;
+                      response = await strategyBrokerService.updateStrategyBrokers(strategyId, apiKeyIds);
+                    }
+
+                    if (response && response.success) {
+                      Alert.alert('Success', 'Broker selection saved successfully');
+                      setShowBrokersModal(false);
+                      await fetchData();
+                    } else {
+                      throw new Error(response?.error || 'Failed to save broker selection');
+                    }
+                  } catch (error: any) {
+                    Alert.alert('Error', error.message || 'Failed to save broker selection');
+                  }
                 }}
               >
                 <Text style={styles.brokersSaveText}>Save Selection</Text>
@@ -2851,30 +3085,30 @@ export default function StrategiesScreen() {
 
             <View style={styles.ownBrokersCountRow}>
               <Text style={[styles.ownBrokersCount, { color: theme.textSecondary }]}>
-                {selectedOwnBrokers.length} of {BROKERS_DATA.length} broker(s) selected
+                {selectedOwnBrokers.length} of {connectedBrokers.length} broker(s) selected
               </Text>
               <TouchableOpacity 
                 style={[styles.selectAllBtn, { backgroundColor: 'rgba(37, 99, 235, 0.1)' }]}
                 onPress={selectAllBrokers}
               >
                 <Text style={[styles.selectAllText, { color: colors.primary }]}>
-                  {selectedOwnBrokers.length === BROKERS_DATA.length ? 'Deselect All' : 'Select All'}
+                  {selectedOwnBrokers.length === connectedBrokers.length ? 'Deselect All' : 'Select All'}
                 </Text>
               </TouchableOpacity>
             </View>
 
             <ScrollView style={styles.ownBrokersList}>
-              {BROKERS_DATA.map((broker) => (
+              {connectedBrokers.map((broker) => (
                 <TouchableOpacity
                   key={broker.id}
                   style={[styles.ownBrokerItem, { 
-                    borderColor: selectedOwnBrokers.includes(broker.id) ? colors.primary : theme.border,
-                    backgroundColor: selectedOwnBrokers.includes(broker.id) ? 'rgba(37, 99, 235, 0.05)' : 'transparent',
+                    borderColor: selectedOwnBrokers.includes(String(broker.id)) ? colors.primary : theme.border,
+                    backgroundColor: selectedOwnBrokers.includes(String(broker.id)) ? 'rgba(37, 99, 235, 0.05)' : 'transparent',
                   }]}
-                  onPress={() => toggleOwnBrokerSelection(broker.id)}
+                  onPress={() => toggleOwnBrokerSelection(String(broker.id))}
                 >
                   <View style={styles.ownBrokerCheckbox}>
-                    {selectedOwnBrokers.includes(broker.id) ? (
+                    {selectedOwnBrokers.includes(String(broker.id)) ? (
                       <CheckSquare size={24} color={colors.primary} weight="fill" />
                     ) : (
                       <Square size={24} color={theme.border} />
@@ -2907,9 +3141,25 @@ export default function StrategiesScreen() {
                   backgroundColor: selectedOwnBrokers.length > 0 ? colors.primary : theme.border,
                 }]}
                 disabled={selectedOwnBrokers.length === 0}
-                onPress={() => {
-                  Alert.alert('Success', `${selectedOwnBrokers.length} broker(s) selected for ${selectedOwnStrategy?.name}`);
-                  setShowOwnBrokersModal(false);
+                onPress={async () => {
+                  if (!selectedOwnStrategy || selectedOwnBrokers.length === 0) return;
+                  try {
+                    const apiKeyIds = selectedOwnBrokers.map(id => Number(id));
+                    const response = await strategyBrokerService.updateStrategyBrokers(
+                      selectedOwnStrategy.id,
+                      apiKeyIds
+                    );
+                    
+                    if (response.success) {
+                      Alert.alert('Success', `${selectedOwnBrokers.length} broker(s) selected for ${selectedOwnStrategy?.name}`);
+                      setShowOwnBrokersModal(false);
+                      await fetchData();
+                    } else {
+                      throw new Error(response.error || 'Failed to save broker selection');
+                    }
+                  } catch (error: any) {
+                    Alert.alert('Error', error.message || 'Failed to save broker selection');
+                  }
                 }}
               >
                 <Text style={[styles.ownBrokersSaveText, { color: selectedOwnBrokers.length > 0 ? '#fff' : theme.textSecondary }]}>Save Changes</Text>
@@ -3187,9 +3437,6 @@ export default function StrategiesScreen() {
                     {/* Card Header */}
                     <View style={styles.cardHeaderRow}>
                       <Text style={[styles.strategyCardName, { color: theme.text }]}>{strategy.name}</Text>
-                      <TouchableOpacity>
-                        <Star size={14} color={theme.textSecondary} weight="regular" />
-                      </TouchableOpacity>
                     </View>
 
                     {/* Tags */}
@@ -3199,9 +3446,6 @@ export default function StrategiesScreen() {
                       </View>
                       <View style={[styles.tag, { backgroundColor: colors.primary + '15', borderColor: colors.primary + '30' }]}>
                         <Text style={[styles.tagText, { color: colors.primary }]}>{strategy.segment}</Text>
-                      </View>
-                      <View style={[styles.tag, { backgroundColor: 'rgba(139, 92, 246, 0.15)', borderColor: 'rgba(139, 92, 246, 0.3)' }]}>
-                        <Text style={[styles.tagText, { color: '#8b5cf6' }]}>By {strategy.madeBy}</Text>
                       </View>
                     </View>
 
@@ -3231,7 +3475,10 @@ export default function StrategiesScreen() {
                     <View style={styles.cardActions}>
                       <TouchableOpacity 
                         style={[styles.viewDetailsBtn, { borderColor: colors.primary }]}
-                        onPress={() => router.push(`/marketplace-strategy-detail?id=${strategy.id}`)}
+                        onPress={() => {
+                          const isOwn = strategy.authorId === user?.id || marketplaceSubTab === 'own';
+                          router.push(`/marketplace-strategy-detail?id=${strategy.id}&isOwn=${isOwn}&capital=${strategy.rawCapital || 0}&name=${encodeURIComponent(strategy.name)}&segment=${strategy.segment}`);
+                        }}
                       >
                         <Text style={[styles.viewDetailsText, { color: colors.primary }]}>View Details</Text>
                       </TouchableOpacity>
@@ -3239,7 +3486,7 @@ export default function StrategiesScreen() {
                       {marketplaceSubTab === 'public' && (
                         subscribedStrategies.some(sub => sub.strategyId === strategy.id) ? (
                           <View 
-                            style={[styles.subscribeBtn, { backgroundColor: '#2c9d2eff' }]}
+                            style={[styles.subscribeBtn, {  backgroundColor: '#4ea851', opacity: 0.7, }]}
                           >
                             <Text style={styles.subscribeBtnText}>Subscribed</Text>
                           </View>
@@ -4466,7 +4713,8 @@ const styles = StyleSheet.create({
   filterRow: {
     flexDirection: 'row',
     gap: spacing.sm,
-    marginBottom: spacing.md,
+    marginTop: spacing.xs - 8,
+    marginBottom: spacing.xs - 14,
   },
   filterButton: {
     flex: 1,

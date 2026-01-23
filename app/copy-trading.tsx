@@ -6,6 +6,7 @@ import {
   ArrowsClockwise,
   Bank,
   CaretDown,
+  CheckSquare,
   Copy,
   GearSix,
   PencilSimple,
@@ -34,36 +35,12 @@ import {
 
 const { width } = Dimensions.get('window');
 
-// Mock data
-const STATS = [
-  { label: 'Total Accounts', value: '9', icon: Users, color: '#2563EB', bgColor: 'rgba(37, 99, 235, 0.15)' },
-  { label: 'Master Accounts', value: '4', icon: TrendUp, color: '#10b981', bgColor: 'rgba(16, 185, 129, 0.15)' },
-  { label: 'Copy Accounts', value: '5', icon: Copy, color: '#3b82f6', bgColor: 'rgba(59, 130, 246, 0.15)' },
-  { label: 'Active Accounts', value: '9', icon: Sparkle, color: '#f59e0b', bgColor: 'rgba(245, 158, 11, 0.15)' },
-];
-
-const TRADING_GROUPS = [
-  {
-    id: '1',
-    name: 'zxcxzcxcxzc',
-    type: 'Master Account',
-    broker: 'xzcxzcxcxzcxzcxczxc',
-    apiKey: '***fcc3',
-    status: 'Active',
-    copyAccounts: [],
-  },
-  {
-    id: '2',
-    name: 'zxczxczxc',
-    type: 'Master Account',
-    broker: 'xcxzczxc',
-    apiKey: '***abc1',
-    status: 'Active',
-    copyAccounts: [
-      { id: 'c1', name: 'cvbvbv', detail: 'vbvbvb • Copying zxczxczxc' },
-      { id: 'c2', name: 'xcxzc', detail: 'xcxc • Copying zxczxczxc' },
-    ],
-  },
+// Default stats when no data
+const DEFAULT_STATS = [
+  { label: 'Total Accounts', value: '0', icon: Users, color: '#2563EB', bgColor: 'rgba(37, 99, 235, 0.15)' },
+  { label: 'Master Accounts', value: '0', icon: TrendUp, color: '#10b981', bgColor: 'rgba(16, 185, 129, 0.15)' },
+  { label: 'Copy Accounts', value: '0', icon: Copy, color: '#3b82f6', bgColor: 'rgba(59, 130, 246, 0.15)' },
+  { label: 'Active Accounts', value: '0', icon: Sparkle, color: '#f59e0b', bgColor: 'rgba(245, 158, 11, 0.15)' },
 ];
 
 export default function CopyTradingScreen({ hideHeader = false, hideTop = false }: { hideHeader?: boolean; hideTop?: boolean }) {
@@ -77,7 +54,7 @@ export default function CopyTradingScreen({ hideHeader = false, hideTop = false 
   const [unlinkedAccounts, setUnlinkedAccounts] = useState<any[]>([]); // Copy accounts without master
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [stats, setStats] = useState(STATS);
+  const [stats, setStats] = useState(DEFAULT_STATS);
   
   // Pagination states for Load More functionality
   const [tradingGroupsVisibleCount, setTradingGroupsVisibleCount] = useState(6);
@@ -87,15 +64,21 @@ export default function CopyTradingScreen({ hideHeader = false, hideTop = false 
   // Fetch copy trading data from API
   const fetchData = useCallback(async () => {
     try {
+      console.log('Copy Trading - Fetching data from API...');
       const [accountsResponse, statsResponse] = await Promise.all([
         copyTradingService.getAccounts(),
         copyTradingService.getStatistics(),
       ]);
       
+      console.log('Copy Trading - Full API response:', JSON.stringify(accountsResponse, null, 2));
+      console.log('Copy Trading - Response success:', accountsResponse.success);
+      console.log('Copy Trading - Response data type:', typeof accountsResponse.data);
+      console.log('Copy Trading - Response data is array:', Array.isArray(accountsResponse.data));
+      
       if (accountsResponse.success && accountsResponse.data) {
         // Transform API data - handle both nested and flat structures
         const allAccounts = Array.isArray(accountsResponse.data) ? accountsResponse.data : [];
-        console.log('Copy Trading - Raw API response:', accountsResponse);
+        console.log('Copy Trading - All accounts:', JSON.stringify(allAccounts, null, 2));
         console.log('Copy Trading - All accounts count:', allAccounts.length);
         
         // API uses: type='master'/'child', masterAccountId for linking
@@ -173,22 +156,44 @@ export default function CopyTradingScreen({ hideHeader = false, hideTop = false 
         ];
         setStats(computedStats);
       } else {
-        // Fallback to mock data only if API fails
-        console.log('Copy Trading - API failed, using mock data');
-        setTradingGroups(TRADING_GROUPS);
+        // No data or API failed - show empty state
+        console.log('Copy Trading - API failed or no data');
+        console.log('Copy Trading - Response:', accountsResponse);
+        console.log('Copy Trading - Success:', accountsResponse.success, 'Data:', accountsResponse.data);
+        setTradingGroups([]);
+        setAllAccountsList([]);
+        setUnlinkedAccounts([]);
+        // Set default stats to 0
+        setStats([
+          { label: 'Total Accounts', value: '0', icon: Users, color: colors.primary, bgColor: 'rgba(37, 99, 235, 0.15)' },
+          { label: 'Master Accounts', value: '0', icon: TrendUp, color: '#10b981', bgColor: 'rgba(16, 185, 129, 0.15)' },
+          { label: 'Copy Accounts', value: '0', icon: Copy, color: '#3b82f6', bgColor: 'rgba(59, 130, 246, 0.15)' },
+          { label: 'Active Accounts', value: '0', icon: Sparkle, color: '#f59e0b', bgColor: 'rgba(245, 158, 11, 0.15)' },
+        ]);
       }
       
       if (statsResponse.success && statsResponse.data) {
         setStats([
-          { label: 'Total Accounts', value: statsResponse.data.totalAccounts.toString(), icon: Users, color: colors.primary, bgColor: 'rgba(37, 99, 235, 0.15)' },
-          { label: 'Master Accounts', value: statsResponse.data.masterAccounts.toString(), icon: TrendUp, color: '#10b981', bgColor: 'rgba(16, 185, 129, 0.15)' },
-          { label: 'Copy Accounts', value: statsResponse.data.childAccounts.toString(), icon: Copy, color: '#3b82f6', bgColor: 'rgba(59, 130, 246, 0.15)' },
-          { label: 'Active Accounts', value: statsResponse.data.activeAccounts.toString(), icon: Sparkle, color: '#f59e0b', bgColor: 'rgba(245, 158, 11, 0.15)' },
+          { label: 'Total Accounts', value: (statsResponse.data.totalAccounts || 0).toString(), icon: Users, color: colors.primary, bgColor: 'rgba(37, 99, 235, 0.15)' },
+          { label: 'Master Accounts', value: (statsResponse.data.masterAccounts || 0).toString(), icon: TrendUp, color: '#10b981', bgColor: 'rgba(16, 185, 129, 0.15)' },
+          { label: 'Copy Accounts', value: (statsResponse.data.childAccounts || 0).toString(), icon: Copy, color: '#3b82f6', bgColor: 'rgba(59, 130, 246, 0.15)' },
+          { label: 'Active Accounts', value: (statsResponse.data.activeAccounts || 0).toString(), icon: Sparkle, color: '#f59e0b', bgColor: 'rgba(245, 158, 11, 0.15)' },
         ]);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching copy trading data:', error);
-      setTradingGroups(TRADING_GROUPS); // Fallback to mock
+      console.error('Error details:', error?.message || error);
+      console.error('Error response:', error?.response?.data || 'No response data');
+      // Show empty state on error instead of mock data
+      setTradingGroups([]);
+      setAllAccountsList([]);
+      setUnlinkedAccounts([]);
+      setStats([
+        { label: 'Total Accounts', value: '0', icon: Users, color: colors.primary, bgColor: 'rgba(37, 99, 235, 0.15)' },
+        { label: 'Master Accounts', value: '0', icon: TrendUp, color: '#10b981', bgColor: 'rgba(16, 185, 129, 0.15)' },
+        { label: 'Copy Accounts', value: '0', icon: Copy, color: '#3b82f6', bgColor: 'rgba(59, 130, 246, 0.15)' },
+        { label: 'Active Accounts', value: '0', icon: Sparkle, color: '#f59e0b', bgColor: 'rgba(245, 158, 11, 0.15)' },
+      ]);
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
@@ -228,6 +233,10 @@ export default function CopyTradingScreen({ hideHeader = false, hideTop = false 
   const [addApiKey, setAddApiKey] = useState('');
   const [addSecretKey, setAddSecretKey] = useState('');
   const [addIsActive, setAddIsActive] = useState(true);
+  const [addAccountType, setAddAccountType] = useState<'master' | 'child'>('master');
+  const [showAddAccountTypeDropdown, setShowAddAccountTypeDropdown] = useState(false);
+  const [showAddBrokerDropdown, setShowAddBrokerDropdown] = useState(false);
+  const [showAddMasterPicker, setShowAddMasterPicker] = useState(false);
   
   // Delete Modal States
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -264,65 +273,148 @@ export default function CopyTradingScreen({ hideHeader = false, hideTop = false 
     setShowEditModal(true);
   };
 
+  // Handler for adding copy account under a master
   const handleOpenAddCopy = (group: any) => {
     setParentGroupForAdd(group);
+    setAddAccountType('child');
     setAddName('');
     setAddBroker('');
     setAddApiKey('');
     setAddSecretKey('');
     setAddIsActive(true);
+    setShowAddAccountTypeDropdown(false);
+    setShowAddBrokerDropdown(false);
+    setShowAddMasterPicker(false);
     setShowAddModal(true);
   };
 
-  const handleCreateCopyAccount = () => {
-    if (!parentGroupForAdd) return;
-    const newCopy = {
-      id: String(Date.now()),
-      name: addName,
-      detail: `${addBroker} • Copying ${parentGroupForAdd.name}`,
-    };
-    setTradingGroups(prev => prev.map(g => g.id === parentGroupForAdd.id ? { ...g, copyAccounts: [...g.copyAccounts, newCopy] } : g));
-    setShowAddModal(false);
+  // Handler for adding new master account
+  const handleOpenAddMaster = () => {
     setParentGroupForAdd(null);
+    setAddAccountType('master');
+    setAddName('');
+    setAddBroker('');
+    setAddApiKey('');
+    setAddSecretKey('');
+    setAddIsActive(true);
+    setShowAddAccountTypeDropdown(false);
+    setShowAddBrokerDropdown(false);
+    setShowAddMasterPicker(false);
+    setShowAddModal(true);
   };
 
-  const handleUpdateAccount = () => {
-    if (!selectedAccount) return;
+  const [isCreating, setIsCreating] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isToggling, setIsToggling] = useState<string | null>(null);
 
-    if (selectedAccount.isCopy) {
-      // Update copy account; allow moving between parent groups
-      setTradingGroups(prev => {
-        // remove from any existing parent
-        const without = prev.map(g => ({ ...g, copyAccounts: g.copyAccounts.filter((c: any) => c.id !== selectedAccount.id) }));
-        // add to the chosen parent
-        return without.map(g => {
-          if (g.id === editParentId) {
-            const updatedCopy = { id: selectedAccount.id, name: editName, detail: `${editBroker} • Copying ${g.name}` };
-            return { ...g, copyAccounts: [...g.copyAccounts, updatedCopy] };
-          }
-          return g;
-        });
-      });
-    } else {
-      setTradingGroups(prev => prev.map(acc => 
-        acc.id === selectedAccount.id 
-          ? { ...acc, name: editName, broker: editBroker, apiKey: editApiKey, status: editIsActive ? 'Active' : 'Inactive' }
-          : acc
-      ));
+  const handleCreateAccount = async () => {
+    if (!addName || !addBroker || !addApiKey || !addSecretKey) {
+      Alert.alert('Error', 'Please fill all required fields');
+      return;
     }
-
-    setShowEditModal(false);
-    setSelectedAccount(null);
-    setEditParentId(null);
+    
+    // Validate child account requires master selection
+    if (addAccountType === 'child' && !parentGroupForAdd) {
+      Alert.alert('Error', 'Please select a master account');
+      return;
+    }
+    setIsCreating(true);
+    try {
+      const response = await copyTradingService.createAccount({
+        name: addName,
+        type: addAccountType,
+        broker: addBroker,
+        apiKey: addApiKey,
+        secretKey: addSecretKey,
+        masterAccountId: addAccountType === 'child' && parentGroupForAdd ? Number(parentGroupForAdd.id) : undefined,
+      });
+      
+      if (response.success) {
+        Alert.alert('Success', response.message || 'Account created successfully');
+        setShowAddModal(false);
+        setParentGroupForAdd(null);
+        setAddName('');
+        setAddBroker('');
+        setAddApiKey('');
+        setAddSecretKey('');
+        setAddAccountType('master');
+        fetchData(); // Refresh the list
+      } else {
+        Alert.alert('Error', response.error || 'Failed to create account');
+      }
+    } catch (error: any) {
+      console.error('Error creating account:', error);
+      Alert.alert('Error', error.message || 'Failed to create account');
+    } finally {
+      setIsCreating(false);
+    }
   };
 
-  const handleToggleStatus = (accountId: string) => {
-    setTradingGroups(prev => prev.map(acc => 
-      acc.id === accountId 
-        ? { ...acc, status: acc.status === 'Active' ? 'Inactive' : 'Active' }
-        : acc
-    ));
-    Alert.alert('Success', 'Account status updated');
+  const handleUpdateAccount = async () => {
+    if (!selectedAccount) return;
+    
+    setIsUpdating(true);
+    try {
+      const updateData: any = {};
+      if (editName) updateData.name = editName;
+      if (editBroker) updateData.broker = editBroker;
+      if (editApiKey && editApiKey !== '***' && !editApiKey.startsWith('***')) {
+        updateData.apiKey = editApiKey;
+      }
+      if (editSecretKey) updateData.secretKey = editSecretKey;
+      updateData.isActive = editIsActive;
+      
+      const response = await copyTradingService.updateAccount(
+        Number(selectedAccount.id),
+        updateData
+      );
+      
+      if (response.success) {
+        Alert.alert('Success', 'Account updated successfully');
+        setShowEditModal(false);
+        setSelectedAccount(null);
+        setEditParentId(null);
+        fetchData(); // Refresh the list
+      } else {
+        Alert.alert('Error', response.error || 'Failed to update account');
+      }
+    } catch (error: any) {
+      console.error('Error updating account:', error);
+      Alert.alert('Error', error.message || 'Failed to update account');
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  const handleToggleStatus = async (accountId: string, currentStatus: string) => {
+    setIsToggling(accountId);
+    try {
+      const newStatus = currentStatus !== 'Active';
+      const response = await copyTradingService.toggleStatus(Number(accountId), newStatus);
+      
+      if (response.success) {
+        // Optimistic update
+        setTradingGroups(prev => prev.map(acc => 
+          acc.id === accountId 
+            ? { ...acc, status: newStatus ? 'Active' : 'Inactive' }
+            : acc
+        ));
+        setAllAccountsList(prev => prev.map(acc =>
+          acc.id === accountId
+            ? { ...acc, status: newStatus ? 'Active' : 'Inactive' }
+            : acc
+        ));
+        Alert.alert('Success', 'Account status updated');
+      } else {
+        Alert.alert('Error', response.error || 'Failed to update status');
+      }
+    } catch (error: any) {
+      console.error('Error toggling status:', error);
+      Alert.alert('Error', error.message || 'Failed to update status');
+    } finally {
+      setIsToggling(null);
+    }
   };
 
   const handleDeleteClick = (account: any) => {
@@ -330,14 +422,26 @@ export default function CopyTradingScreen({ hideHeader = false, hideTop = false 
     setShowDeleteModal(true);
   };
 
-  const confirmDelete = () => {
-    if (accountToDelete) {
-      if (accountToDelete.isCopy && accountToDelete.parentId) {
-        setTradingGroups(prev => prev.map(g => g.id === accountToDelete.parentId ? { ...g, copyAccounts: g.copyAccounts.filter((c: any) => c.id !== accountToDelete.id) } : g));
+  const confirmDelete = async () => {
+    if (!accountToDelete) return;
+    
+    setIsDeleting(true);
+    try {
+      const response = await copyTradingService.deleteAccount(Number(accountToDelete.id));
+      
+      if (response.success) {
+        Alert.alert('Success', 'Account deleted successfully');
+        setShowDeleteModal(false);
+        setAccountToDelete(null);
+        fetchData(); // Refresh the list
       } else {
-        setTradingGroups(prev => prev.filter(acc => acc.id !== accountToDelete.id));
+        Alert.alert('Error', response.error || 'Failed to delete account');
       }
-      setShowDeleteModal(false);
+    } catch (error: any) {
+      console.error('Error deleting account:', error);
+      Alert.alert('Error', error.message || 'Failed to delete account');
+    } finally {
+      setIsDeleting(false);
       setAccountToDelete(null);
     }
   };
@@ -372,6 +476,19 @@ export default function CopyTradingScreen({ hideHeader = false, hideTop = false 
             />
           }
         >
+          {/* DEBUG INFO - REMOVE LATER */}
+          {!hideTop && __DEV__ && (
+            <View style={{ padding: 12, margin: 12, backgroundColor: isDark ? '#1e293b' : '#f1f5f9', borderRadius: 8, borderWidth: 1, borderColor: isDark ? '#334155' : '#cbd5e1' }}>
+              <Text style={{ color: theme.text, fontWeight: '700', marginBottom: 8 }}>Debug Info:</Text>
+              <Text style={{ color: theme.textSecondary, fontSize: 12 }}>Trading Groups: {tradingGroups.length}</Text>
+              <Text style={{ color: theme.textSecondary, fontSize: 12 }}>Unlinked Accounts: {unlinkedAccounts.length}</Text>
+              <Text style={{ color: theme.textSecondary, fontSize: 12 }}>All Accounts: {allAccountsList.length}</Text>
+              <Text style={{ color: theme.textSecondary, fontSize: 12 }}>Active Tab: {activeTab}</Text>
+              <Text style={{ color: theme.textSecondary, fontSize: 12 }}>Loading: {isLoading.toString()}</Text>
+              <Text style={{ color: theme.textSecondary, fontSize: 12 }}>Hide Top: {hideTop.toString()}</Text>
+            </View>
+          )}
+          
           {/* Stats Cards */}
           {!hideTop && (
             <ScrollView 
@@ -434,27 +551,76 @@ export default function CopyTradingScreen({ hideHeader = false, hideTop = false 
         )}
 
         {/* Lists based on active tab */}
-        {!hideTop && activeTab === 'trading' && (
+        {activeTab === 'trading' && (
           <View style={styles.groupsList}>
-            {tradingGroups.length === 0 && (
+            {tradingGroups.length === 0 ? (
+              // If there are no master groups but some unlinked child accounts exist,
+              // show a helpful banner and list the unlinked accounts so user can link them.
+              unlinkedAccounts.length > 0 ? (
+                <>
+                  <View style={[styles.emptyStateCard, { backgroundColor: isDark ? 'rgba(255, 249, 230, 0.95)' : '#fff7ed', borderColor: isDark ? 'rgba(148, 163, 184, 0.12)' : 'rgba(250, 204, 21, 0.25)' }]}>
+                    <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center' }}>
+                      <Warning size={32} color="#d97706" weight="duotone" />
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.emptyStateTitle, { color: isDark ? '#ffedd5' : '#92400e' }]}>These child accounts need to be linked to a master account to start copy trading.</Text>
+                        <Text style={[styles.emptyStateText, { color: isDark ? '#fef3c7' : '#92400e' }]}>Link each child account to a master or create a new master account.</Text>
+                      </View>
+                      <TouchableOpacity style={[styles.emptyStateButton, { backgroundColor: colors.primary }]} onPress={handleOpenAddMaster}>
+                        <Plus size={16} color="#fff" weight="bold" />
+                        <Text style={styles.emptyStateButtonText}>Add Master</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+
+                  {/* Render unlinked child accounts here so user can act immediately */}
+                  {unlinkedAccounts.slice(0, unlinkedAccountsVisibleCount).map((account) => (
+                    <View key={account.id} style={[styles.groupCard, { backgroundColor: isDark ? 'rgba(30, 41, 59, 0.95)' : '#ffffff', borderColor: isDark ? 'rgba(148, 163, 184, 0.4)' : 'rgba(250, 204, 21, 0.3)' }]}> 
+                      <View style={styles.masterHeader}>
+                        <View style={styles.masterLeft}>
+                          <View style={[styles.masterIcon, { backgroundColor: 'rgba(245, 158, 11, 0.12)' }]}> 
+                            <Copy size={18} color="#e1a948ff" weight="bold" />
+                          </View>
+                          <View style={styles.masterInfo}>
+                            <Text style={[styles.masterName, { color: theme.text }]}>{account.name}</Text>
+                            <View style={styles.masterDetails}>
+                              <Text style={[styles.brokerText, { color: theme.textSecondary }]}>{account.broker} • {account.type}</Text>
+                            </View>
+                          </View>
+                        </View>
+                        <View style={styles.masterActions}>
+                          <TouchableOpacity style={[styles.actionBtn, { backgroundColor: colors.primary + '15' }]} onPress={() => handleEditAccount({ ...account, type: 'Child Account' })}>
+                            <PencilSimple size={13} color={colors.primary} weight="bold" />
+                          </TouchableOpacity>
+                          <TouchableOpacity style={[styles.actionBtn, { backgroundColor: 'rgba(239, 68, 68, 0.06)' }]} onPress={() => handleDeleteClick(account)}>
+                            <Trash size={12} color={theme.textSecondary} weight="bold" />
+                          </TouchableOpacity>
+                          <TouchableOpacity style={[styles.actionBtn, { backgroundColor: colors.primary }]} onPress={() => handleOpenAddMaster()}>
+                            <Text style={{ color: '#fff', fontWeight: '700' }}>Link to Master</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    </View>
+                  ))}
+                </>
+              ) : (
               <View style={[styles.emptyStateCard, { 
                 backgroundColor: isDark ? 'rgba(30, 41, 59, 0.95)' : '#ffffff', 
                 borderColor: isDark ? 'rgba(148, 163, 184, 0.4)' : 'rgba(226, 232, 240, 0.8)' 
-              }]}>
+              }]}> 
                 <Warning size={48} color={isDark ? '#a1a1aa' : '#6b7280'} weight="duotone" />
-                <Text style={[styles.emptyStateTitle, { color: isDark ? '#ffffff' : '#1f2937' }]}>No Trading Accounts</Text>
-                <Text style={[styles.emptyStateText, { color: isDark ? '#a1a1aa' : '#6b7280' }]}>You haven't connected any broker accounts yet. Add a trading account to get started.</Text>
+                <Text style={[styles.emptyStateTitle, { color: isDark ? '#ffffff' : '#1f2937' }]}>No Trading Groups Yet</Text>
+                <Text style={[styles.emptyStateText, { color: isDark ? '#a1a1aa' : '#6b7280' }]}>Start by creating your first master trading account to begin copy trading.</Text>
                 <TouchableOpacity
                   style={[styles.emptyStateButton, { backgroundColor: colors.primary }]}
-                  onPress={() => setShowAddModal(true)}
+                  onPress={handleOpenAddMaster}
                 >
                   <Plus size={16} color="#fff" weight="bold" />
-                  <Text style={styles.emptyStateButtonText}>Add Account</Text>
+                  <Text style={styles.emptyStateButtonText}>Add Master Account</Text>
                 </TouchableOpacity>
               </View>
-            )}
+              )
+            ) : (
 
-            {tradingGroups.length > 0 && (
               <>
                 {tradingGroups.slice(0, tradingGroupsVisibleCount).map((group) => (
                   <View 
@@ -495,9 +661,14 @@ export default function CopyTradingScreen({ hideHeader = false, hideTop = false 
                         </TouchableOpacity>
                         <TouchableOpacity 
                           style={[styles.actionBtn, { backgroundColor: group.status === 'Active' ? 'rgba(16, 185, 129, 0.06)' : 'rgba(148, 163, 184, 0.06)' }]}
-                          onPress={() => handleToggleStatus(group.id)}
+                          onPress={() => handleToggleStatus(group.id, group.status)}
+                          disabled={isToggling === group.id}
                         >
-                          <Sparkle size={12} color={group.status === 'Active' ? '#10b981' : '#94a3b8'} weight="fill" />
+                          {isToggling === group.id ? (
+                            <ActivityIndicator size="small" color={colors.primary} />
+                          ) : (
+                            <Sparkle size={12} color={group.status === 'Active' ? '#10b981' : '#94a3b8'} weight="fill" />
+                          )}
                         </TouchableOpacity>
                         <TouchableOpacity 
                           style={[styles.actionBtn, { backgroundColor: 'rgba(239, 68, 68, 0.06)' }]}
@@ -559,7 +730,7 @@ export default function CopyTradingScreen({ hideHeader = false, hideTop = false 
           </View>
         )}
 
-        {!hideTop && activeTab === 'all' && (
+        {activeTab === 'all' && (
           <View style={styles.groupsList}>
             {allAccountsList.length === 0 ? (
               <View style={[styles.emptyStateCard, { 
@@ -567,14 +738,14 @@ export default function CopyTradingScreen({ hideHeader = false, hideTop = false 
                 borderColor: isDark ? 'rgba(148, 163, 184, 0.4)' : 'rgba(226, 232, 240, 0.8)' 
               }]}>
                 <GearSix size={48} color={isDark ? '#a1a1aa' : '#6b7280'} weight="duotone" />
-                <Text style={[styles.emptyStateTitle, { color: isDark ? '#ffffff' : '#1f2937' }]}>No Accounts Found</Text>
-                <Text style={[styles.emptyStateText, { color: isDark ? '#a1a1aa' : '#6b7280' }]}>Create your first trading account to start copy trading.</Text>
+                <Text style={[styles.emptyStateTitle, { color: isDark ? '#ffffff' : '#1f2937' }]}>No Accounts Yet</Text>
+                <Text style={[styles.emptyStateText, { color: isDark ? '#a1a1aa' : '#6b7280' }]}>Start by creating your first trading account</Text>
                 <TouchableOpacity
                   style={[styles.emptyStateButton, { backgroundColor: colors.primary }]}
-                  onPress={() => setShowAddModal(true)}
+                  onPress={handleOpenAddMaster}
                 >
                   <Plus size={16} color="#fff" weight="bold" />
-                  <Text style={styles.emptyStateButtonText}>Add Account</Text>
+                  <Text style={styles.emptyStateButtonText}>Create Account</Text>
                 </TouchableOpacity>
               </View>
             ) : (
@@ -606,17 +777,24 @@ export default function CopyTradingScreen({ hideHeader = false, hideTop = false 
                     <View style={styles.masterActions}>
                       <TouchableOpacity 
                         style={[styles.actionBtn, { backgroundColor: isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(37, 99, 235, 0.1)' }]}
-                        onPress={() => {/* handleEditAccount */}}
+                        onPress={() => handleEditAccount({ ...account, type: account.type === 'Master Account' ? 'Master Account' : 'Child Account' })}
                       >
                         <PencilSimple size={13} color={colors.primary} weight="bold" />
                       </TouchableOpacity>
                       <TouchableOpacity 
                         style={[styles.actionBtn, { backgroundColor: account.status === 'Active' ? 'rgba(16, 185, 129, 0.06)' : 'rgba(148, 163, 184, 0.06)' }]}
+                        onPress={() => handleToggleStatus(account.id, account.status)}
+                        disabled={isToggling === account.id}
                       >
-                        <Sparkle size={12} color={account.status === 'Active' ? '#10b981' : '#94a3b8'} weight="fill" />
+                        {isToggling === account.id ? (
+                          <ActivityIndicator size="small" color={colors.primary} />
+                        ) : (
+                          <Sparkle size={12} color={account.status === 'Active' ? '#10b981' : '#94a3b8'} weight="fill" />
+                        )}
                       </TouchableOpacity>
                       <TouchableOpacity 
                         style={[styles.actionBtn, { backgroundColor: 'rgba(239, 68, 68, 0.06)' }]}
+                        onPress={() => handleDeleteClick(account)}
                       >
                         <Trash size={12} color={theme.textSecondary} weight="bold" />
                       </TouchableOpacity>
@@ -640,16 +818,16 @@ export default function CopyTradingScreen({ hideHeader = false, hideTop = false 
           </View>
         )}
 
-        {!hideTop && activeTab === 'unlinked' && (
+        {activeTab === 'unlinked' && (
           <View style={styles.groupsList}>
             {unlinkedAccounts.length === 0 ? (
               <View style={[styles.emptyStateCard, { 
                 backgroundColor: isDark ? 'rgba(30, 41, 59, 0.95)' : '#ffffff', 
                 borderColor: isDark ? 'rgba(148, 163, 184, 0.4)' : 'rgba(226, 232, 240, 0.8)' 
               }]}>
-                <Bank size={48} color={isDark ? '#a1a1aa' : '#6b7280'} weight="duotone" />
-                <Text style={[styles.emptyStateTitle, { color: isDark ? '#ffffff' : '#1f2937' }]}>No Unlinked Accounts</Text>
-                <Text style={[styles.emptyStateText, { color: isDark ? '#a1a1aa' : '#6b7280' }]}>All your copy accounts are linked to master accounts.</Text>
+                <CheckSquare size={48} color="#10b981" weight="duotone" />
+                <Text style={[styles.emptyStateTitle, { color: isDark ? '#ffffff' : '#1f2937' }]}>All Accounts Properly Linked</Text>
+                <Text style={[styles.emptyStateText, { color: isDark ? '#a1a1aa' : '#6b7280' }]}>Every child account has a master to copy from</Text>
               </View>
             ) : (
               <>
@@ -673,11 +851,13 @@ export default function CopyTradingScreen({ hideHeader = false, hideTop = false 
                       <View style={styles.masterActions}>
                         <TouchableOpacity 
                           style={[styles.actionBtn, { backgroundColor: isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(37, 99, 235, 0.1)' }]}
+                          onPress={() => handleEditAccount({ ...account, type: 'Child Account' })}
                         >
                           <PencilSimple size={13} color={colors.primary} weight="bold" />
                         </TouchableOpacity>
                         <TouchableOpacity 
                           style={[styles.actionBtn, { backgroundColor: 'rgba(239, 68, 68, 0.06)' }]}
+                          onPress={() => handleDeleteClick(account)}
                         >
                           <Trash size={12} color={theme.textSecondary} weight="bold" />
                         </TouchableOpacity>
@@ -854,18 +1034,22 @@ export default function CopyTradingScreen({ hideHeader = false, hideTop = false 
                 <Text style={[styles.cancelBtnText, { color: colors.primary }]}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity 
-                style={[styles.updateBtn, { backgroundColor: editName && editBroker ? colors.primary : theme.border }]}
+                style={[styles.updateBtn, { backgroundColor: editName && editBroker && !isUpdating ? colors.primary : theme.border }]}
                 onPress={handleUpdateAccount}
-                disabled={!editName || !editBroker}
+                disabled={!editName || !editBroker || isUpdating}
               >
-                <Text style={[styles.updateBtnText, { color: editName && editBroker ? '#ffffff' : theme.textSecondary }]}>Update</Text>
+                {isUpdating ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
+                ) : (
+                  <Text style={[styles.updateBtnText, { color: editName && editBroker ? '#ffffff' : theme.textSecondary }]}>Update</Text>
+                )}
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
-      {/* Add Copy Account Modal */}
+      {/* Add Account Modal */}
       <Modal
         visible={showAddModal}
         transparent
@@ -873,8 +1057,20 @@ export default function CopyTradingScreen({ hideHeader = false, hideTop = false 
         onRequestClose={() => setShowAddModal(false)}
       >
         <View style={styles.modalOverlay}>
+          <ScrollView 
+            style={{ maxHeight: '90%' }}
+            contentContainerStyle={{ flexGrow: 1, justifyContent: 'center' }}
+            showsVerticalScrollIndicator={false}
+          >
           <View style={[styles.editModalContent, { backgroundColor: theme.surface }]}>
-            <Text style={[styles.editModalTitle, { color: theme.text }]}>Add New Account</Text>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.lg }}>
+              <Text style={[styles.editModalTitle, { color: theme.text, marginBottom: 0 }]}>
+                {addAccountType === 'master' ? 'Add Master Account' : 'Add Copy Account'}
+              </Text>
+              <TouchableOpacity onPress={() => setShowAddModal(false)}>
+                <X size={24} color={theme.textSecondary} weight="bold" />
+              </TouchableOpacity>
+            </View>
 
             <View style={styles.editForm}>
               <View style={styles.inputGroup}>
@@ -890,11 +1086,67 @@ export default function CopyTradingScreen({ hideHeader = false, hideTop = false 
 
               <View style={styles.inputGroup}>
                 <Text style={[styles.inputLabel, { color: theme.text }]}>Account Type *</Text>
-                <View style={[styles.dropdown, { backgroundColor: isDark ? 'rgba(10, 10, 26, 0.5)' : '#f8fafc', borderColor: theme.border }]}>
-                  <Text style={[styles.dropdownText, { color: theme.text }]}>Master Account</Text>
+                <TouchableOpacity
+                  style={[styles.dropdown, { backgroundColor: isDark ? 'rgba(10, 10, 26, 0.5)' : '#f8fafc', borderColor: theme.border }]}
+                  onPress={() => setShowAddAccountTypeDropdown(!showAddAccountTypeDropdown)}
+                >
+                  <Text style={[styles.dropdownText, { color: theme.text }]}>
+                    {addAccountType === 'master' ? 'Master Account' : 'Copy Account'}
+                  </Text>
                   <CaretDown size={16} color={theme.textSecondary} weight="bold" />
-                </View>
+                </TouchableOpacity>
+                {showAddAccountTypeDropdown && (
+                  <View style={[styles.dropdownPicker, { backgroundColor: isDark ? theme.surface : '#ffffff', borderColor: theme.border }]}>
+                    <TouchableOpacity
+                      style={styles.pickerItem}
+                      onPress={() => { setAddAccountType('master'); setParentGroupForAdd(null); setShowAddAccountTypeDropdown(false); }}
+                    >
+                      <Text style={[styles.pickerItemText, { color: theme.text }]}>Master Account</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.pickerItem}
+                      onPress={() => { setAddAccountType('child'); setShowAddAccountTypeDropdown(false); }}
+                    >
+                      <Text style={[styles.pickerItemText, { color: theme.text }]}>Copy Account</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
               </View>
+
+              {/* Master Account Picker - only show when adding child account */}
+              {addAccountType === 'child' && (
+                <View style={styles.inputGroup}>
+                  <Text style={[styles.inputLabel, { color: theme.text }]}>Select Master Account *</Text>
+                  <TouchableOpacity
+                    style={[styles.dropdown, { backgroundColor: isDark ? 'rgba(10, 10, 26, 0.5)' : '#f8fafc', borderColor: theme.border }]}
+                    onPress={() => setShowAddMasterPicker(!showAddMasterPicker)}
+                  >
+                    <Text style={[styles.dropdownText, { color: parentGroupForAdd ? theme.text : theme.textSecondary }]}>
+                      {parentGroupForAdd ? parentGroupForAdd.name : 'Select Master Account'}
+                    </Text>
+                    <CaretDown size={16} color={theme.textSecondary} weight="bold" />
+                  </TouchableOpacity>
+                  {showAddMasterPicker && (
+                    <View style={[styles.dropdownPicker, { backgroundColor: isDark ? theme.surface : '#ffffff', borderColor: theme.border }]}>
+                      {tradingGroups.length === 0 ? (
+                        <View style={styles.pickerItem}>
+                          <Text style={[styles.pickerItemText, { color: theme.textSecondary }]}>No master accounts available</Text>
+                        </View>
+                      ) : (
+                        tradingGroups.map(g => (
+                          <TouchableOpacity
+                            key={g.id}
+                            style={styles.pickerItem}
+                            onPress={() => { setParentGroupForAdd(g); setShowAddMasterPicker(false); }}
+                          >
+                            <Text style={[styles.pickerItemText, { color: theme.text }]}>{g.name} {g.broker ? `(${g.broker})` : ''}</Text>
+                          </TouchableOpacity>
+                        ))
+                      )}
+                    </View>
+                  )}
+                </View>
+              )}
 
               <View style={styles.inputGroup}>
                 <Text style={[styles.inputLabel, { color: theme.text }]}>Broker *</Text>
@@ -902,7 +1154,7 @@ export default function CopyTradingScreen({ hideHeader = false, hideTop = false 
                   style={[styles.input, { backgroundColor: isDark ? 'rgba(10, 10, 26, 0.5)' : '#f8fafc', color: theme.text, borderColor: theme.border }]}
                   value={addBroker}
                   onChangeText={setAddBroker}
-                  placeholder="Broker"
+                  placeholder="e.g., Binance, Delta Exchange"
                   placeholderTextColor={theme.textSecondary}
                 />
               </View>
@@ -913,9 +1165,8 @@ export default function CopyTradingScreen({ hideHeader = false, hideTop = false 
                   style={[styles.input, { backgroundColor: isDark ? 'rgba(10, 10, 26, 0.5)' : '#f8fafc', color: theme.text, borderColor: theme.border }]}
                   value={addApiKey}
                   onChangeText={setAddApiKey}
-                  placeholder="API Key"
+                  placeholder="Your API Key"
                   placeholderTextColor={theme.textSecondary}
-                  secureTextEntry
                 />
               </View>
 
@@ -925,7 +1176,7 @@ export default function CopyTradingScreen({ hideHeader = false, hideTop = false 
                   style={[styles.input, { backgroundColor: isDark ? 'rgba(10, 10, 26, 0.5)' : '#f8fafc', color: theme.text, borderColor: theme.border }]}
                   value={addSecretKey}
                   onChangeText={setAddSecretKey}
-                  placeholder="Secret Key"
+                  placeholder="Your Secret Key"
                   placeholderTextColor={theme.textSecondary}
                   secureTextEntry
                 />
@@ -950,14 +1201,19 @@ export default function CopyTradingScreen({ hideHeader = false, hideTop = false 
                 <Text style={[styles.cancelBtnText, { color: colors.primary }]}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.updateBtn, { backgroundColor: addName && addBroker && addApiKey && addSecretKey ? colors.primary : theme.border }]}
-                onPress={handleCreateCopyAccount}
-                disabled={!addName || !addBroker || !addApiKey || !addSecretKey}
+                style={[styles.updateBtn, { backgroundColor: addName && addBroker && addApiKey && addSecretKey && !isCreating ? colors.primary : theme.border }]}
+                onPress={handleCreateAccount}
+                disabled={!addName || !addBroker || !addApiKey || !addSecretKey || isCreating}
               >
-                <Text style={[styles.updateBtnText, { color: addName && addBroker && addApiKey && addSecretKey ? '#ffffff' : theme.textSecondary }]}>Create</Text>
+                {isCreating ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
+                ) : (
+                  <Text style={[styles.updateBtnText, { color: addName && addBroker && addApiKey && addSecretKey ? '#ffffff' : theme.textSecondary }]}>Create</Text>
+                )}
               </TouchableOpacity>
             </View>
           </View>
+          </ScrollView>
         </View>
       </Modal>
 
@@ -992,14 +1248,20 @@ export default function CopyTradingScreen({ hideHeader = false, hideTop = false 
               <TouchableOpacity 
                 style={[styles.deleteCancelBtn, { borderColor: colors.primary }]}
                 onPress={() => setShowDeleteModal(false)}
+                disabled={isDeleting}
               >
                 <Text style={[styles.deleteCancelText, { color: colors.primary }]}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity 
-                style={[styles.deleteConfirmBtn, { backgroundColor: colors.error }]}
+                style={[styles.deleteConfirmBtn, { backgroundColor: isDeleting ? theme.border : colors.error }]}
                 onPress={confirmDelete}
+                disabled={isDeleting}
               >
-                <Text style={styles.deleteConfirmText}>Delete Account</Text>
+                {isDeleting ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
+                ) : (
+                  <Text style={styles.deleteConfirmText}>Delete Account</Text>
+                )}
               </TouchableOpacity>
             </View>
           </View>

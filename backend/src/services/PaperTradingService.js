@@ -37,14 +37,34 @@ const getPipValue = (symbol) => {
   return PIP_VALUES[normalizedSymbol] || PIP_VALUES.DEFAULT;
 };
 
+// Comprehensive crypto symbol list for detection
+const CRYPTO_SYMBOLS = ['BTC', 'ETH', 'XRP', 'DOGE', 'SOL', 'ADA', 'DOT', 'MATIC', 
+                         'LINK', 'UNI', 'AAVE', 'BNB', 'LTC', 'XLM', 'ATOM', 'AVAX',
+                         'SHIB', 'APE', 'CRV', 'FTM', 'NEAR', 'OP', 'ARB', 'IMX'];
+
+/**
+ * Check if symbol is a crypto symbol
+ */
+const isCryptoSymbol = (symbol) => {
+  const sym = symbol.toUpperCase();
+  return CRYPTO_SYMBOLS.some(crypto => sym.includes(crypto));
+};
+
 /**
  * Calculate profit/loss for a position
+ * Industry-standard P&L calculation matching all trading platforms
  */
 const calculatePnL = (position, currentPrice) => {
   const openPrice = parseFloat(position.openPrice);
   const volume = parseFloat(position.volume);
   const type = position.type;
-  const pipValue = getPipValue(position.symbol);
+  const market = position.market;
+  const symbol = position.symbol.toUpperCase();
+  
+  // Validate inputs to prevent incorrect calculations
+  if (!openPrice || !volume || !currentPrice || openPrice <= 0 || volume <= 0) {
+    return { profit: 0, profitPercent: 0 };
+  }
   
   let priceDiff;
   if (type === 'Buy') {
@@ -53,18 +73,40 @@ const calculatePnL = (position, currentPrice) => {
     priceDiff = openPrice - currentPrice;
   }
   
-  // Calculate profit based on symbol type
+  // Calculate profit based on market type (priority) and symbol patterns (fallback)
   let profit;
-  const symbol = position.symbol.toUpperCase();
   
-  if (symbol.includes('BTC') || symbol.includes('ETH') || symbol.includes('XRP')) {
-    // Crypto: profit = volume * price difference
+  // CRYPTO: Simple calculation (1 unit = 1 unit)
+  if (market === 'Crypto' || isCryptoSymbol(symbol)) {
     profit = volume * priceDiff;
-  } else if (symbol.includes('JPY')) {
-    // JPY pairs: different pip calculation
+  }
+  // GOLD (XAUUSD): 1 lot = 100 oz
+  else if (symbol.includes('XAU')) {
+    profit = volume * 100 * priceDiff;
+  }
+  // SILVER (XAGUSD): 1 lot = 5,000 oz
+  else if (symbol.includes('XAG')) {
+    profit = volume * 5000 * priceDiff;
+  }
+  // OIL (WTI/USOIL/BRENT): 1 lot = 1000 barrels
+  else if (symbol.includes('WTI') || symbol.includes('OIL') || symbol.includes('BRENT')) {
+    profit = volume * 1000 * priceDiff;
+  }
+  // JPY PAIRS: Account for 2-decimal pricing
+  else if (symbol.includes('JPY')) {
     profit = volume * 100000 * (priceDiff / 100);
-  } else {
-    // Forex standard: profit = volume * 100000 * priceDiff * pipValue
+  }
+  // INDICES (US30, NAS100, etc.): Contract-specific
+  else if (symbol.includes('US30') || symbol.includes('US500') || symbol.includes('NAS100')) {
+    const multiplier = symbol.includes('US30') ? 1 : 1;
+    profit = volume * multiplier * priceDiff;
+  }
+  // INDIAN MARKETS: Simple calculation
+  else if (market === 'Indian') {
+    profit = volume * priceDiff;
+  }
+  // STANDARD FOREX: 1 lot = 100,000 units
+  else {
     profit = volume * 100000 * priceDiff;
   }
   
@@ -77,21 +119,35 @@ const calculatePnL = (position, currentPrice) => {
 };
 
 /**
+ * Get pip multiplier for symbol
+ * JPY pairs: 0.01 (2 decimals), Crypto: 1, Standard Forex: 0.0001 (5 decimals)
+ */
+const getPipMultiplier = (symbol) => {
+  const sym = symbol.toUpperCase();
+  if (sym.includes('JPY')) return 0.01;
+  if (isCryptoSymbol(sym)) return 1;
+  if (sym.includes('XAU') || sym.includes('XAG')) return 0.01;
+  return 0.0001;
+};
+
+/**
  * Calculate SL/TP price levels
+ * Supports: 'price' (direct), 'points' (pips), 'percentage' modes
  */
 const calculateStopLevels = (openPrice, type, slType, slValue, tpType, tpValue, symbol) => {
   let stopLoss = null;
   let takeProfit = null;
   
-  const pipMultiplier = symbol.toUpperCase().includes('JPY') ? 0.01 : 0.0001;
+  const pipMultiplier = getPipMultiplier(symbol);
   
   if (slValue && slValue > 0) {
     if (slType === 'price') {
       stopLoss = slValue;
     } else if (slType === 'points') {
+      const distance = slValue * pipMultiplier;
       stopLoss = type === 'Buy' 
-        ? openPrice - (slValue * pipMultiplier)
-        : openPrice + (slValue * pipMultiplier);
+        ? openPrice - distance
+        : openPrice + distance;
     } else if (slType === 'percentage') {
       stopLoss = type === 'Buy'
         ? openPrice * (1 - slValue / 100)
@@ -103,9 +159,10 @@ const calculateStopLevels = (openPrice, type, slType, slValue, tpType, tpValue, 
     if (tpType === 'price') {
       takeProfit = tpValue;
     } else if (tpType === 'points') {
+      const distance = tpValue * pipMultiplier;
       takeProfit = type === 'Buy'
-        ? openPrice + (tpValue * pipMultiplier)
-        : openPrice - (tpValue * pipMultiplier);
+        ? openPrice + distance
+        : openPrice - distance;
     } else if (tpType === 'percentage') {
       takeProfit = type === 'Buy'
         ? openPrice * (1 + tpValue / 100)
@@ -161,6 +218,7 @@ class PaperTradingService {
       type,
       volume,
       openPrice,
+      apiKeyId = null,
       stopLossType = 'points',
       stopLossValue = 0,
       takeProfitType = 'points',
@@ -181,6 +239,7 @@ class PaperTradingService {
       const position = await PaperPosition.create({
         userId,
         strategyId,
+        apiKeyId,
         orderId,
         symbol: symbol.toUpperCase(),
         market,
@@ -286,7 +345,7 @@ class PaperTradingService {
   }
 
   /**
-   * Modify SL/TP of an open position
+   * Modify SL/TP of an open position with validation
    */
   async modifyPosition(orderId, modifications) {
     try {
@@ -302,17 +361,47 @@ class PaperTradingService {
       }
 
       const updates = {};
+      const currentPrice = parseFloat(position.currentPrice || position.openPrice);
+      const type = position.type;
       
+      // Validate and set Stop Loss
       if (modifications.stopLoss !== undefined) {
-        updates.stopLoss = modifications.stopLoss;
+        const sl = parseFloat(modifications.stopLoss);
+        if (sl && sl > 0) {
+          // Validate SL direction
+          if (type === 'Buy' && sl >= currentPrice) {
+            console.warn(`⚠️ SL for Buy position should be below current price. SL: ${sl}, Current: ${currentPrice}`);
+            // Allow but log warning - user might be setting SL intentionally above for some reason
+          }
+          if (type === 'Sell' && sl <= currentPrice) {
+            console.warn(`⚠️ SL for Sell position should be above current price. SL: ${sl}, Current: ${currentPrice}`);
+          }
+          updates.stopLoss = sl;
+        } else {
+          updates.stopLoss = null; // Clear SL if 0 or null passed
+        }
       }
+      
+      // Validate and set Take Profit
       if (modifications.takeProfit !== undefined) {
-        updates.takeProfit = modifications.takeProfit;
+        const tp = parseFloat(modifications.takeProfit);
+        if (tp && tp > 0) {
+          // Validate TP direction
+          if (type === 'Buy' && tp <= currentPrice) {
+            console.warn(`⚠️ TP for Buy position should be above current price. TP: ${tp}, Current: ${currentPrice}`);
+          }
+          if (type === 'Sell' && tp >= currentPrice) {
+            console.warn(`⚠️ TP for Sell position should be below current price. TP: ${tp}, Current: ${currentPrice}`);
+          }
+          updates.takeProfit = tp;
+        } else {
+          updates.takeProfit = null; // Clear TP if 0 or null passed
+        }
       }
 
       await position.update(updates);
 
-      console.log(`📝 Paper position modified: ${orderId} | SL: ${updates.stopLoss}, TP: ${updates.takeProfit}`);
+      console.log(`📝 Paper position modified: ${orderId} | SL: ${updates.stopLoss ?? 'unchanged'}, TP: ${updates.takeProfit ?? 'unchanged'}`);
 
       // Emit real-time update
       if (emitPaperPositionUpdate) {

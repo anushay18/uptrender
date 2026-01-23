@@ -432,7 +432,7 @@ const styles = StyleSheet.create({
   },
   footer: {
     position: 'absolute',
-    bottom: Platform.OS === 'android' ? 50 : 0,
+    bottom: Platform.OS === 'android' ? 0 : 0,
     left: 0,
     right: 0,
     padding: 16,

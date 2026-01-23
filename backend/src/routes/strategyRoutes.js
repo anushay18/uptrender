@@ -22,7 +22,8 @@ import {
   saveDraft,
   getUserDrafts,
   generateStrategyCode,
-  getStrategyPublicStats
+  getStrategyPublicStats,
+  checkStrategyOpenPositions
 } from '../controllers/strategyController.js';
 import { 
   createStrategyValidation,
@@ -49,6 +50,8 @@ router.get('/', authenticate, paginationValidation, getUserStrategies);
 router.post('/', authenticate, createStrategyValidation, createStrategy);
 // Public stats for a strategy (auth required; visible if public or owned) - MUST come before /:id
 router.get('/:id/stats', authenticate, idParamValidation, getStrategyPublicStats);
+// Check if strategy has open positions
+router.get('/:id/check-positions', authenticate, idParamValidation, checkStrategyOpenPositions);
 // Generic strategy routes
 router.get('/:id', authenticate, idParamValidation, getStrategyById);
 router.put('/:id', authenticate, idParamValidation, updateStrategyValidation, updateStrategy);

@@ -24,8 +24,8 @@ const StrategySubscription = sequelize.define('StrategySubscription', {
     }
   },
   lots: {
-    type: DataTypes.INTEGER,
-    defaultValue: 1,
+    type: DataTypes.DECIMAL(10, 2),
+    defaultValue: 0.01,
     allowNull: false
   },
   isActive: {

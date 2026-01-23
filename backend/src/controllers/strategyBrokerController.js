@@ -315,11 +315,55 @@ export const addMultipleBrokersToStrategy = async (req, res) => {
     const { strategyId } = req.params;
     const { apiKeyIds } = req.body;
 
-    if (!apiKeyIds || !Array.isArray(apiKeyIds) || apiKeyIds.length === 0) {
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('[addMultipleBrokersToStrategy] userId:', userId);
+    console.log('[addMultipleBrokersToStrategy] strategyId:', strategyId);
+    console.log('[addMultipleBrokersToStrategy] Request body:', JSON.stringify(req.body));
+    console.log('[addMultipleBrokersToStrategy] apiKeyIds:', apiKeyIds);
+    console.log('[addMultipleBrokersToStrategy] apiKeyIds type:', typeof apiKeyIds);
+    console.log('[addMultipleBrokersToStrategy] apiKeyIds isArray:', Array.isArray(apiKeyIds));
+    console.log('[addMultipleBrokersToStrategy] apiKeyIds length:', apiKeyIds?.length);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+    if (!apiKeyIds || !Array.isArray(apiKeyIds)) {
       await transaction.rollback();
       return res.status(400).json({ 
         success: false,
-        error: 'API Key IDs array is required' 
+        error: 'API Key IDs array is required',
+        received: { apiKeyIds, type: typeof apiKeyIds, isArray: Array.isArray(apiKeyIds) }
+      });
+    }
+
+    // Allow empty array to remove all brokers
+    if (apiKeyIds.length === 0) {
+      console.log('[addMultipleBrokersToStrategy] Empty array - removing all brokers');
+      
+      // Verify strategy belongs to user
+      const strategy = await Strategy.findOne({
+        where: { id: strategyId, userId },
+        transaction
+      });
+
+      if (!strategy) {
+        await transaction.rollback();
+        return res.status(404).json({ 
+          success: false,
+          error: 'Strategy not found or access denied' 
+        });
+      }
+
+      // Remove all existing associations
+      await StrategyBroker.destroy({
+        where: { strategyId },
+        transaction
+      });
+
+      await transaction.commit();
+
+      return res.json({
+        success: true,
+        message: 'All brokers removed from strategy',
+        data: { count: 0 }
       });
     }
 
@@ -346,11 +390,23 @@ export const addMultipleBrokersToStrategy = async (req, res) => {
       transaction
     });
 
+    console.log('[addMultipleBrokersToStrategy] Found apiKeys:', apiKeys.length);
+    console.log('[addMultipleBrokersToStrategy] apiKeys IDs:', apiKeys.map(k => k.id));
+    console.log('[addMultipleBrokersToStrategy] Requested apiKeyIds:', apiKeyIds);
+
     if (apiKeys.length !== apiKeyIds.length) {
       await transaction.rollback();
+      const foundIds = apiKeys.map(k => k.id);
+      const missingIds = apiKeyIds.filter(id => !foundIds.includes(id));
+      console.log('[addMultipleBrokersToStrategy] ❌ Missing API Key IDs:', missingIds);
       return res.status(400).json({ 
         success: false,
-        error: 'Some API keys not found or access denied' 
+        error: 'Some API keys not found or access denied',
+        details: {
+          requested: apiKeyIds,
+          found: foundIds,
+          missing: missingIds
+        }
       });
     }
 

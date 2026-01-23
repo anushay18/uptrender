@@ -56,8 +56,8 @@ const Strategy = sequelize.define('Strategy', {
     defaultValue: 1
   },
   lots: {
-    type: DataTypes.INTEGER,
-    defaultValue: 1
+    type: DataTypes.DECIMAL(10, 2),
+    defaultValue: 0.01
   },
   expiryDate: {
     type: DataTypes.DATEONLY,

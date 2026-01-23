@@ -1,28 +1,29 @@
 import { borderRadius, colors, getTheme, shadows, spacing } from '@/constants/styles';
 import { useTheme } from '@/context/ThemeContext';
 import { paperPositionService } from '@/services';
+import { WS_EVENTS, wsService } from '@/services/websocket';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
-    ArrowLeft,
-    Bank,
-    ChartLineUp,
-    Clock,
-    Lightning,
-    TrendDown,
-    TrendUp,
+  ArrowLeft,
+  Bank,
+  ChartLineUp,
+  Clock,
+  Lightning,
+  TrendDown,
+  TrendUp,
 } from 'phosphor-react-native';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Dimensions,
-    Platform,
-    RefreshControl,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View
+  ActivityIndicator,
+  Dimensions,
+  Platform,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View
 } from 'react-native';
 
 const { width } = Dimensions.get('window');
@@ -175,6 +176,55 @@ export default function OpenTradeDetailScreen() {
   useEffect(() => {
     fetchPosition();
   }, [fetchPosition]);
+
+  // Keep a ref of the currently displayed position id so websocket handlers target it
+  const posIdRef = useRef<number | string | null>(null);
+  useEffect(() => { posIdRef.current = position?.id ?? null; }, [position?.id]);
+
+  // Subscribe to real-time MTM and position updates and merge into local `position`
+  useEffect(() => {
+    const handleMTMUpdate = (data: any) => {
+      // Batch update
+      if (data.positions && Array.isArray(data.positions)) {
+        const u = data.positions.find((p: any) => String(p.id) === String(posIdRef.current));
+        if (!u) return;
+        setPosition(prev => prev ? ({
+          ...prev,
+          ltp: u.currentPrice ?? prev.ltp,
+          mtm: u.profit ?? prev.mtm,
+        }) : prev);
+        return;
+      }
+
+      // Single update payload
+      if (data.positionId && String(data.positionId) === String(posIdRef.current) && data.currentPrice !== undefined) {
+        setPosition(prev => prev ? ({
+          ...prev,
+          ltp: data.currentPrice ?? prev.ltp,
+          mtm: data.profit ?? prev.mtm,
+        }) : prev);
+      }
+    };
+
+    const handlePositionUpdate = (payload: any) => {
+      const pos = payload.position || payload;
+      if (!pos) return;
+      if (String(pos.id) !== String(posIdRef.current)) return;
+      setPosition(prev => prev ? ({
+        ...prev,
+        ltp: pos.currentPrice ?? prev.ltp,
+        mtm: pos.profit ?? prev.mtm,
+      }) : prev);
+    };
+
+    wsService.on(WS_EVENTS.PAPER_MTM_UPDATE, handleMTMUpdate);
+    wsService.on(WS_EVENTS.PAPER_POSITION_UPDATE, handlePositionUpdate);
+
+    return () => {
+      wsService.off(WS_EVENTS.PAPER_MTM_UPDATE, handleMTMUpdate);
+      wsService.off(WS_EVENTS.PAPER_POSITION_UPDATE, handlePositionUpdate);
+    };
+  }, []);
 
   const handleRefresh = useCallback(() => {
     setIsRefreshing(true);

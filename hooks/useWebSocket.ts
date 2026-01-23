@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { NotificationData, PaperPositionUpdate, PriceMTMUpdate, StrategyUpdate, TradeUpdate, WalletUpdate, WS_EVENTS, wsService } from '../services/websocket';
+import { NotificationData, PaperPositionUpdate, StrategyUpdate, TradeUpdate, WalletUpdate, WS_EVENTS, wsService } from '../services/websocket';
 
 // Hook for WebSocket connection status
 export function useWebSocketConnection() {
@@ -133,38 +133,151 @@ export function useNotifications(onNewNotification?: (data: NotificationData) =>
 // Hook for paper position updates (real-time MTM)
 export function usePaperPositionUpdates(onUpdate?: (data: PaperPositionUpdate) => void) {
   const [positions, setPositions] = useState<Map<number, any>>(new Map());
+  const onUpdateRef = useRef(onUpdate);
+  
+  // Keep the ref up to date with the latest callback
+  useEffect(() => {
+    onUpdateRef.current = onUpdate;
+  }, [onUpdate]);
 
   useEffect(() => {
-    wsService.subscribePaperPrices();
-    wsService.subscribePaperMTM();
+    console.log('🔌 [Hook] usePaperPositionUpdates effect mounted');
+    
+    // Ensure subscriptions are active. If socket is not yet connected,
+    // subscribe once connection is established to avoid missed events.
+    const ensureSubscriptions = () => {
+      const isConnected = wsService.isConnected();
+      console.log('🔌 [Hook] ensureSubscriptions called, wsService.isConnected:', isConnected);
+      if (isConnected) {
+        console.log('✅ [Hook] Socket connected, subscribing to paper_prices and paper_mtm');
+        wsService.subscribePaperPrices();
+        wsService.subscribePaperMTM();
+      } else {
+        console.log('⚠️ [Hook] Socket NOT connected, subscriptions will happen after connection');
+      }
+    };
 
-    const handlePositionUpdate = (data: PaperPositionUpdate) => {
+    // Try immediately (in case already connected)
+    ensureSubscriptions();
+    
+    // Also subscribe when connection establishes
+    const handleConnected = () => {
+      console.log('✅ [Hook] WebSocket CONNECTED event received, re-subscribing...');
+      ensureSubscriptions();
+    };
+    wsService.on(WS_EVENTS.CONNECTED, handleConnected);
+    
+    // CRITICAL: If socket is already connected when hook mounts but we missed the event,
+    // we need to ensure we're subscribed. Check again after a short delay.
+    const delayedCheck = setTimeout(() => {
+      const isConnected = wsService.isConnected();
+      console.log('🔌 [Hook] Delayed check (1s): socket connected:', isConnected);
+      if (isConnected) {
+        console.log('✅ [Hook] Delayed check: socket connected, ensuring subscriptions');
+        ensureSubscriptions();
+      }
+    }, 1000);
+
+    const handlePositionUpdate = (data: any) => {
+      console.log('🔔 [Hook] RAW position update received:', JSON.stringify(data, null, 2));
+      
+      // Map backend action to frontend type
+      // Backend sends: action = 'open', 'close', 'modify', 'mtm', 'sl_hit', 'tp_hit'
+      // Frontend expects: type = 'opened', 'closed', 'modified', 'mtm_update', 'sl_hit', 'tp_hit'
+      const actionToTypeMap: { [key: string]: string } = {
+        'open': 'opened',
+        'close': 'closed',
+        'modify': 'modified',
+        'mtm': 'mtm_update',
+        'update': 'mtm_update',
+        'sl_hit': 'sl_hit',
+        'tp_hit': 'tp_hit',
+        'create': 'opened',
+      };
+      
+      const action = data.action || data.type;
+      const type = actionToTypeMap[action] || action || 'mtm_update';
+      
+      console.log('🔔 [Hook] Position update mapped: action:', action, '-> type:', type, 'positionId:', data.position?.id, 'currentPrice:', data.position?.currentPrice, 'profit:', data.position?.profit);
+      
+      const normalizedData: PaperPositionUpdate = {
+        type: type as any,
+        position: {
+          ...data.position,
+          id: data.position?.id !== undefined ? Number(data.position.id) : data.position?.id,
+        },
+      };
+      
+      console.log('✅ [Hook] Normalized data:', JSON.stringify(normalizedData, null, 2));
+      
       setPositions(prev => {
         const newMap = new Map(prev);
-        if (data.type === 'closed') {
-          newMap.delete(data.position.id);
-        } else {
-          newMap.set(data.position.id, data.position);
+        const posId = data.position?.id !== undefined ? Number(data.position.id) : data.position?.id;
+        if (type === 'closed' || type === 'sl_hit' || type === 'tp_hit') {
+          newMap.delete(posId);
+        } else if (posId !== undefined) {
+          newMap.set(posId, { ...data.position, id: posId });
         }
         return newMap;
       });
-      onUpdate?.(data);
+      onUpdateRef.current?.(normalizedData);
     };
 
-    const handleMTMUpdate = (data: PriceMTMUpdate) => {
+    const handleMTMUpdate = (data: any) => {
+      console.log('💹 [Hook] RAW MTM update received:', JSON.stringify(data, null, 2));
+      
       setPositions(prev => {
         const newMap = new Map(prev);
-        data.positions.forEach(pos => {
-          const existing = newMap.get(pos.id);
+        let updatedCount = 0;
+
+        // Support both shapes: { positions: [...] } and single update with positionId
+        if (data && Array.isArray(data.positions)) {
+          console.log(`💹 [Hook] Processing batch MTM update for ${data.positions.length} positions`);
+          data.positions.forEach(pos => {
+            const pid = pos.id !== undefined ? Number(pos.id) : pos.id;
+            const existing = newMap.get(pid);
+            if (existing) {
+              const oldPrice = existing.currentPrice;
+              const newPrice = pos.currentPrice;
+              newMap.set(pid, {
+                ...existing,
+                currentPrice: pos.currentPrice,
+                profit: pos.profit,
+                profitPercent: pos.profitPercent,
+              });
+              updatedCount++;
+              if (oldPrice !== newPrice) {
+                console.log(`✨ [Hook] Position ${pid} price changed: ${oldPrice} -> ${newPrice}`);
+              }
+            } else {
+              console.log(`⚠️ [Hook] Position ${pid} not found in map`);
+            }
+          });
+          console.log(`✅ [Hook] Batch MTM update complete: ${updatedCount} positions updated`);
+        } else if (data && (data.positionId || (data.position && data.position.id))) {
+          console.log('💹 [Hook] Processing single MTM update');
+          const idRaw = data.positionId ?? data.position?.id;
+          const id = idRaw !== undefined ? Number(idRaw) : idRaw;
+          const existing = newMap.get(id);
           if (existing) {
-            newMap.set(pos.id, {
+            const oldPrice = existing.currentPrice;
+            const newPrice = data.currentPrice ?? data.position?.currentPrice ?? existing.currentPrice;
+            newMap.set(id, {
               ...existing,
-              currentPrice: pos.currentPrice,
-              profit: pos.profit,
-              profitPercent: pos.profitPercent,
+              currentPrice: newPrice,
+              profit: data.profit ?? data.position?.profit ?? existing.profit,
+              profitPercent: data.profitPercent ?? data.position?.profitPercent ?? existing.profitPercent,
             });
+            if (oldPrice !== newPrice) {
+              console.log(`✨ [Hook] Single position ${id} price changed: ${oldPrice} -> ${newPrice}`);
+            }
+          } else {
+            console.log(`⚠️ [Hook] Position ${id} not found in map`);
           }
-        });
+        } else {
+          console.log('⚠️ [Hook] MTM update data format not recognized:', data);
+        }
+
         return newMap;
       });
     };
@@ -173,10 +286,12 @@ export function usePaperPositionUpdates(onUpdate?: (data: PaperPositionUpdate) =
     wsService.on(WS_EVENTS.PAPER_MTM_UPDATE, handleMTMUpdate);
 
     return () => {
+      clearTimeout(delayedCheck);
       wsService.off(WS_EVENTS.PAPER_POSITION_UPDATE, handlePositionUpdate);
       wsService.off(WS_EVENTS.PAPER_MTM_UPDATE, handleMTMUpdate);
+      wsService.off(WS_EVENTS.CONNECTED, handleConnected);
     };
-  }, [onUpdate]);
+  }, []); // Empty dependency array - effect runs once, callback ref handles updates
 
   return Array.from(positions.values());
 }

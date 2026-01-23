@@ -1,5 +1,7 @@
 import { StrategySubscription, Strategy, User, Wallet, WalletTransaction, ApiKey, StrategyBroker } from '../models/index.js';
 import { sequelize } from '../config/database.js';
+import { Op } from 'sequelize';
+import emailNotificationHelper from '../utils/emailNotificationHelper.js';
 
 /**
  * Subscribe to a strategy
@@ -9,7 +11,7 @@ export const subscribeToStrategy = async (req, res) => {
   
   try {
     const userId = req.user.id;
-    const { strategyId, lots = 1 } = req.body;
+    const { strategyId, lots = 0.01 } = req.body;
 
     // Check if strategy exists and is public
     const strategy = await Strategy.findByPk(strategyId);
@@ -90,12 +92,21 @@ export const subscribeToStrategy = async (req, res) => {
     const subscription = await StrategySubscription.create({
       userId,
       strategyId,
-      lots: parseInt(lots) || 1,
+      lots: parseFloat(lots) || 0.01,
       isActive: true,
       expiryDate
     }, { transaction });
 
     await transaction.commit();
+
+    // Send email notification for subscription
+    emailNotificationHelper.notifySubscription(userId, {
+      strategyName: strategy.name,
+      creatorName: strategy.creatorName || 'Strategy Creator',
+      expiryDate: expiryDate,
+      price: price,
+      lots: parseFloat(lots) || 0.01
+    }).catch(err => console.error('Failed to send subscription email:', err));
 
     res.status(201).json({
       success: true,
@@ -109,7 +120,7 @@ export const subscribeToStrategy = async (req, res) => {
     console.error('Subscribe to strategy error:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to subscribe to strategy',
+      error: 'Unable to subscribe to this strategy. Please try again',
       message: error.message
     });
   }
@@ -177,7 +188,7 @@ export const unsubscribeFromStrategy = async (req, res) => {
     console.error('Unsubscribe from strategy error:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to unsubscribe from strategy',
+      error: 'Unable to unsubscribe from this strategy. Please try again',
       message: error.message
     });
   }
@@ -202,7 +213,7 @@ export const updateSubscription = async (req, res) => {
 
     const updates = {};
     if (typeof lots !== 'undefined') {
-      updates.lots = parseInt(lots) || 1;
+      updates.lots = parseFloat(lots) || 0.01;
     }
     if (typeof isActive !== 'undefined') {
       updates.isActive = !!isActive;
@@ -226,7 +237,7 @@ export const updateSubscription = async (req, res) => {
     console.error('Update subscription error:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to update subscription',
+      error: 'Unable to update subscription settings. Please try again',
       message: error.message
     });
   }
@@ -259,6 +270,11 @@ export const getUserSubscriptions = async (req, res) => {
         {
           model: Strategy,
           as: 'strategy',
+          // Filter out strategies owned by the user (don't show own strategies in subscribed list)
+          where: {
+            userId: { [Op.ne]: userId }
+          },
+          required: true,
           include: [
             {
               model: User,
@@ -287,7 +303,7 @@ export const getUserSubscriptions = async (req, res) => {
     console.error('Error stack:', error.stack);
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch subscriptions',
+      error: 'Unable to load your subscriptions. Please refresh the page',
       message: error.message,
       details: error.errors ? error.errors.map(e => e.message) : undefined
     });
@@ -345,7 +361,7 @@ export const checkSubscriptionOpenPositions = async (req, res) => {
     console.error('Check open positions error:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to check open positions',
+      error: 'Unable to check open positions. Please try again',
       message: error.message
     });
   }
@@ -388,7 +404,7 @@ export const getSubscriptionById = async (req, res) => {
     console.error('Get subscription error:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch subscription',
+      error: 'Unable to load subscription details. Please try again',
       message: error.message
     });
   }
@@ -512,7 +528,7 @@ export const renewSubscription = async (req, res) => {
     console.error('Renew subscription error:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to renew subscription',
+      error: 'Unable to renew subscription. Please try again',
       message: error.message
     });
   }
@@ -592,7 +608,7 @@ export const toggleSubscriptionPause = async (req, res) => {
     console.error('Toggle subscription pause error:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to toggle pause state',
+      error: 'Unable to pause/resume subscription. Please try again',
       message: error.message
     });
   }
@@ -676,7 +692,7 @@ export const setSubscriptionTradeMode = async (req, res) => {
     console.error('Set trade mode error:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to set trade mode',
+      error: 'Unable to change trade mode. Please try again',
       message: error.message
     });
   }
@@ -742,7 +758,7 @@ export const getSubscriptionBrokers = async (req, res) => {
     console.error('Get subscription brokers error:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch brokers',
+      error: 'Unable to load broker accounts. Please try again',
       message: error.message
     });
   }
@@ -841,7 +857,7 @@ export const updateSubscriptionBrokers = async (req, res) => {
     console.error('Update subscription brokers error:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to update brokers',
+      error: 'Unable to update broker selection. Please try again',
       message: error.message
     });
   }

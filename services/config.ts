@@ -2,16 +2,17 @@
 // By default point to the deployed backend. If you need local testing,
 // uncomment the local URLs below and comment the deployed URLs.
 const DEFAULT_API_URL = 'https://app.uptrender.in';
-const DEFAULT_WS_URL = 'wss://app.uptrender.in';
+// Socket.IO uses HTTP/HTTPS URL (it handles WebSocket upgrade internally)
+const DEFAULT_WS_URL = 'https://app.uptrender.in';
 
 // Local development (example):
 // const DEFAULT_API_URL = 'http://192.168.1.13:4001';
-// const DEFAULT_WS_URL = 'ws://192.168.1.13:4001';
+// const DEFAULT_WS_URL = 'http://192.168.1.13:4001';
 
 export const API_CONFIG = {
   BASE_URL: process.env.EXPO_PUBLIC_API_URL || DEFAULT_API_URL,
   API_URL: process.env.EXPO_PUBLIC_API_URL ? `${process.env.EXPO_PUBLIC_API_URL}/api` : `${DEFAULT_API_URL}/api`,
-  WS_URL: process.env.EXPO_PUBLIC_WS_URL || DEFAULT_WS_URL,
+  WS_URL: process.env.EXPO_PUBLIC_WS_URL || process.env.EXPO_PUBLIC_API_URL || DEFAULT_WS_URL,
   TIMEOUT: 30000,
 };
 
@@ -29,6 +30,7 @@ export const ENDPOINTS = {
   AUTH: {
     LOGIN: '/auth/login',
     REGISTER: '/auth/register',
+    GOOGLE_LOGIN: '/auth/google',
     REFRESH: '/auth/refresh',
     LOGOUT: '/auth/logout',
   },
@@ -90,8 +92,8 @@ export const ENDPOINTS = {
   SUBSCRIPTIONS: {
     LIST: '/strategies/subscriptions',
     BY_ID: (id: number) => `/strategies/subscriptions/${id}`,
-    SUBSCRIBE: (strategyId: number) => `/strategies/subscriptions/${strategyId}/subscribe`,
-    UNSUBSCRIBE: (id: number) => `/strategies/subscriptions/${id}/unsubscribe`,
+    SUBSCRIBE: '/strategies/subscriptions/subscribe',
+    UNSUBSCRIBE: (id: number) => `/strategies/subscriptions/${id}`,
     RENEW: (id: number) => `/strategies/subscriptions/${id}/renew`,
     PAUSE: (id: number) => `/strategies/subscriptions/${id}/toggle-pause`,
     SET_MODE: (id: number) => `/strategies/subscriptions/${id}/trade-mode`,
@@ -102,11 +104,11 @@ export const ENDPOINTS = {
   
   // Strategy Brokers
   STRATEGY_BROKERS: {
-    LIST: (strategyId: number) => `/strategy-brokers/${strategyId}`,
-    ADD: (strategyId: number) => `/strategy-brokers/${strategyId}`,
-    BULK_ADD: (strategyId: number) => `/strategy-brokers/${strategyId}/bulk`,
-    REMOVE: (id: number) => `/strategy-brokers/${id}`,
-    TOGGLE: (id: number) => `/strategy-brokers/${id}/toggle`,
+    LIST: (strategyId: number) => `/strategy-brokers/${strategyId}/brokers`,
+    ADD: (strategyId: number) => `/strategy-brokers/${strategyId}/brokers`,
+    BULK_ADD: (strategyId: number) => `/strategy-brokers/${strategyId}/brokers/bulk`,
+    REMOVE: (strategyId: number, strategyBrokerId: number) => `/strategy-brokers/${strategyId}/brokers/${strategyBrokerId}`,
+    TOGGLE: (strategyId: number, strategyBrokerId: number) => `/strategy-brokers/${strategyId}/brokers/${strategyBrokerId}/toggle`,
   },
   
   // API Keys
@@ -145,7 +147,7 @@ export const ENDPOINTS = {
     STATISTICS: '/copy-trading/statistics',
     BY_ID: (id: number) => `/copy-trading/${id}`,
     TEST: (id: number) => `/copy-trading/${id}/test`,
-    TOGGLE: (id: number) => `/copy-trading/${id}/toggle`,
+    TOGGLE: (id: number) => `/copy-trading/${id}/toggle-status`,
   },
   
   // Paper Positions

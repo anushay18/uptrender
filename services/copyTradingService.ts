@@ -37,9 +37,11 @@ export interface CreateCopyTradingAccountData {
 
 export interface UpdateCopyTradingAccountData {
   name?: string;
+  broker?: string;
   apiKey?: string;
   secretKey?: string;
   masterAccountId?: number;
+  isActive?: boolean;
 }
 
 export const copyTradingService = {
@@ -79,8 +81,8 @@ export const copyTradingService = {
   },
 
   // Toggle account status
-  async toggleStatus(id: number): Promise<ApiResponse<CopyTradingAccount>> {
-    return await api.patch<CopyTradingAccount>(ENDPOINTS.COPY_TRADING.TOGGLE(id));
+  async toggleStatus(id: number, isActive: boolean): Promise<ApiResponse<CopyTradingAccount>> {
+    return await api.patch<CopyTradingAccount>(ENDPOINTS.COPY_TRADING.TOGGLE(id), { isActive });
   },
 };
 

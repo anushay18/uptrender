@@ -23,6 +23,6 @@ export const getPlatformStats = async (req, res) => {
     });
   } catch (error) {
     console.error('Get platform stats error:', error);
-    res.status(500).json({ error: 'Failed to fetch platform statistics' });
+    res.status(500).json({ error: 'Unable to load dashboard statistics. Please refresh the page' });
   }
 };

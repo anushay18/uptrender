@@ -3,15 +3,15 @@ import { sequelize } from '../config/database.js';
 
 const ApiKey = sequelize.define('ApiKey', {
   id: {
-    type: DataTypes.INTEGER,
+    type: DataTypes.INTEGER.UNSIGNED,
     primaryKey: true,
     autoIncrement: true
   },
   userId: {
-    type: DataTypes.INTEGER,
+    type: DataTypes.INTEGER.UNSIGNED,
     allowNull: false,
     references: {
-      model: 'Users',
+      model: 'users',
       key: 'id'
     }
   },
@@ -64,11 +64,33 @@ const ApiKey = sequelize.define('ApiKey', {
   // MT5 specific fields
   appName: {
     type: DataTypes.STRING(255),
-    allowNull: true
+    allowNull: true,
+    comment: 'Application name for MT5 connection'
   },
   accessToken: {
     type: DataTypes.TEXT,  // Changed from STRING(500) to TEXT for MetaAPI JWT tokens
-    allowNull: true
+    allowNull: true,
+    comment: 'MetaAPI access token for MT5'
+  },
+  token: {
+    type: DataTypes.STRING(512),
+    allowNull: true,
+    comment: 'Additional token for broker authentication'
+  },
+  accountId: {
+    type: DataTypes.STRING(100),
+    allowNull: true,
+    comment: 'MT5 account ID from MetaAPI'
+  },
+  server: {
+    type: DataTypes.STRING(255),
+    allowNull: true,
+    comment: 'MT5 server name'
+  },
+  login: {
+    type: DataTypes.STRING(255),
+    allowNull: true,
+    comment: 'MT5 login number'
   },
   autologin: {
     type: DataTypes.BOOLEAN,

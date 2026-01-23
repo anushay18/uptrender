@@ -14,8 +14,10 @@ import { sequelize } from './src/models/index.js';
 import { initializeSocketIO } from './src/config/socket.js';
 import redisClient from './src/utils/redisClient.js';
 import mt5BrokerPool from './src/utils/mt5BrokerPool.js';
+import centralizedStreamingService from './src/services/CentralizedStreamingService.js';
 import { initializeSubscriptionCronJobs } from './src/utils/subscriptionCron.js';
 import { priceUpdater } from './src/services/PaperPositionPriceUpdater.js';
+import { brokerPositionSyncService } from './src/services/BrokerPositionSyncService.js';
 import process from 'process';
 
 const PORT = process.env.PORT || 5000;
@@ -48,8 +50,18 @@ sequelize.authenticate()
       console.warn('⚠️ Redis connection failed - continuing without Redis');
     }
     
-    // Start MT5 broker pool cleanup timer
-    console.log('✅ MT5 Broker Pool initialized');
+    // Initialize Centralized Streaming Service (admin-configured MetaAPI or Deriv)
+    // This runs in background, doesn't block startup
+    centralizedStreamingService.initialize().then(result => {
+      if (result.success) {
+        console.log('✅ Centralized Streaming connected (all price data from admin config)');
+      } else {
+        console.warn('⚠️ Centralized Streaming not configured - configure in Admin > Data Streaming');
+        console.warn('   Price data will not be available until streaming is configured');
+      }
+    }).catch(err => {
+      console.warn('⚠️ Platform MT5 init failed:', err.message);
+    });
     
     // Initialize subscription cron jobs
     initializeSubscriptionCronJobs();
@@ -59,12 +71,16 @@ sequelize.authenticate()
     priceUpdater.start();
     console.log('✅ Paper position price updater started');
     
+    // Start broker position sync service (lazy - only if MT5 trades exist)
+    brokerPositionSyncService.start();
+    console.log('✅ Broker position sync service initialized (lazy mode)');
+    
     server.listen(PORT, () => {
       console.log(`🚀 Server running on port ${PORT}`);
       console.log(`📊 Environment: ${process.env.NODE_ENV}`);
       console.log(`🔌 Socket.IO: Enabled`);
       console.log(`📡 Redis: ${redisConnected ? 'Connected' : 'Disabled'}`);
-      console.log(`⚡ MT5 Connection Pool: Active`);
+      console.log(`⚡ Platform MT5: Initializing in background...`);
     });
   })
   .catch(err => {
@@ -79,11 +95,17 @@ process.on('SIGINT', async () => {
   // Stop paper position price updater
   priceUpdater.stop();
   
+  // Stop broker position sync service
+  brokerPositionSyncService.stop();
+  
+  // Disconnect Platform MT5
+  await platformMT5Service.disconnect();
+  
   // Disconnect Redis
   await redisClient.disconnect();
   
-  // Cleanup MT5 connections
-  await mt5BrokerPool.cleanupIdleConnections(true); // Force cleanup all
+  // Cleanup MT5 user connections pool
+  await mt5BrokerPool.cleanupIdleConnections(true);
   
   // Close database
   await sequelize.close();

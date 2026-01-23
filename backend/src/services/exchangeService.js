@@ -37,7 +37,8 @@ export const getPopularExchanges = () => {
     { id: 'huobi', name: 'Huobi', logo: 'huobi.png', requiresPassword: false, defaultType: 'spot' },
     { id: 'bitmex', name: 'BitMEX', logo: 'bitmex.png', requiresPassword: false, defaultType: 'swap' },
     { id: 'deribit', name: 'Deribit', logo: 'deribit.png', requiresPassword: false, defaultType: 'future' },
-    { id: 'delta', name: 'Delta Exchange', logo: 'delta.png', requiresPassword: false, defaultType: 'future' },
+    { id: 'delta', name: 'Delta Exchange (India)', logo: 'delta.png', requiresPassword: false, defaultType: 'future' },
+    { id: 'deltademo', name: 'Delta Exchange (Demo)', logo: 'delta.png', requiresPassword: false, defaultType: 'future' },
     { id: 'wazirx', name: 'WazirX', logo: 'wazirx.png', requiresPassword: false, defaultType: 'spot' },
     { id: 'coindcx', name: 'CoinDCX', logo: 'coindcx.png', requiresPassword: false, defaultType: 'spot' },
   ];
@@ -59,11 +60,18 @@ export const isPasswordRequired = (exchangeId) => {
  * @returns {Object} Exchange info
  */
 export const getExchangeInfo = (exchangeId) => {
-  if (!ccxt.exchanges.includes(exchangeId)) {
+  // Map custom exchange IDs to CCXT exchange classes
+  const exchangeIdMap = {
+    'deltademo': 'delta', // Delta Demo uses the same CCXT class as Delta
+  };
+  
+  const ccxtExchangeId = exchangeIdMap[exchangeId] || exchangeId;
+  
+  if (!ccxt.exchanges.includes(ccxtExchangeId)) {
     throw new Error(`Exchange ${exchangeId} is not supported`);
   }
   
-  const ExchangeClass = ccxt[exchangeId];
+  const ExchangeClass = ccxt[ccxtExchangeId];
   const exchange = new ExchangeClass();
   
   return {
@@ -108,13 +116,20 @@ export const getExchangeInstance = async (
   passphrase = null,
   options = {}
 ) => {
+  // Map custom exchange IDs to CCXT exchange classes
+  const exchangeIdMap = {
+    'deltademo': 'delta', // Delta Demo uses the same CCXT class as Delta
+  };
+  
+  const ccxtExchangeId = exchangeIdMap[exchangeId] || exchangeId;
+  
   // Validate exchange
-  if (!ccxt.exchanges.includes(exchangeId)) {
+  if (!ccxt.exchanges.includes(ccxtExchangeId)) {
     throw new Error(`Exchange ${exchangeId} is not supported by CCXT`);
   }
 
   // Dynamic Class Loading
-  const ExchangeClass = ccxt[exchangeId];
+  const ExchangeClass = ccxt[ccxtExchangeId];
 
   // Use plain keys directly and trim whitespace
   let key = apiKey;
@@ -160,6 +175,16 @@ export const getExchangeInstance = async (
       api: {
         public: 'https://api.india.delta.exchange',
         private: 'https://api.india.delta.exchange',
+      },
+    };
+  }
+
+  // Configure Delta Exchange Demo API
+  if (exchangeId === 'deltademo') {
+    exchangeConfig.urls = {
+      api: {
+        public: 'https://cdn.demo.delta.exchange',
+        private: 'https://api.demo.delta.exchange',
       },
     };
   }

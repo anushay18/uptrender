@@ -1,10 +1,109 @@
 // COMPLETE REPLACEMENT FOR executeTradingViewWebhook FUNCTION
 // This implements multi-subscriber execution for strategy webhooks
 
-import { Trade, Strategy, User, StrategySubscription, StrategyBroker, ApiKey } from '../models/index.js';
+import { Trade, Strategy, User, StrategySubscription, StrategyBroker, ApiKey, SignalLog, PerTradeCharge, Wallet, WalletTransaction, Notification } from '../models/index.js';
 import { mt5Broker } from '../../algoengine/index.js';
 import { emitTradeUpdate } from '../config/socket.js';
 import { paperTradingService } from '../services/PaperTradingService.js';
+
+/**
+ * Process per-trade charge for a user (both owner and subscriber)
+ * Deducts the configured per-trade charge from the user's wallet
+ * Applies to ALL users executing live trades on configured strategies
+ */
+const processPerTradeChargeForSubscriber = async ({ subscriberId, ownerId, strategyId, strategyName, tradeId }) => {
+  try {
+    // Charge applies to everyone (owner and subscribers) for live trades
+
+    // Check if there's an active per-trade charge config
+    const perTradeCharge = await PerTradeCharge.findOne({
+      where: { isActive: true },
+      order: [['id', 'ASC']]
+    });
+
+    if (!perTradeCharge || !perTradeCharge.strategyIds) {
+      return { success: true, skipped: true, reason: 'No active per-trade charge configuration' };
+    }
+
+    // Check if strategy is in the list of strategies with per-trade charge
+    const strategyIds = Array.isArray(perTradeCharge.strategyIds) 
+      ? perTradeCharge.strategyIds 
+      : JSON.parse(perTradeCharge.strategyIds || '[]');
+
+    if (!strategyIds.includes(Number(strategyId))) {
+      return { success: true, skipped: true, reason: 'Strategy not configured for per-trade charge' };
+    }
+
+    const chargeAmount = parseFloat(perTradeCharge.amount);
+    if (!chargeAmount || chargeAmount <= 0) {
+      return { success: true, skipped: true, reason: 'Charge amount is zero or invalid' };
+    }
+
+    // Get subscriber wallet
+    const wallet = await Wallet.findOne({
+      where: { userId: subscriberId, status: 'Active' }
+    });
+
+    if (!wallet) {
+      console.warn(`⚠️ No active wallet found for user ${subscriberId}`);
+      return { success: false, error: 'No active wallet found' };
+    }
+
+    const currentBalance = parseFloat(wallet.balance) || 0;
+
+    if (currentBalance < chargeAmount) {
+      console.warn(`⚠️ Insufficient balance for per-trade charge: User ${subscriberId} has ₹${currentBalance}, needs ₹${chargeAmount}`);
+      // Still allow the trade, just log the warning
+      return { 
+        success: false, 
+        error: 'Insufficient balance',
+        currentBalance,
+        chargeAmount
+      };
+    }
+
+    // Deduct charge
+    const newBalance = currentBalance - chargeAmount;
+    await wallet.update({ balance: newBalance });
+
+    // Create transaction record
+    await WalletTransaction.create({
+      walletId: wallet.id,
+      type: 'debit',
+      amount: chargeAmount,
+      description: `Per-trade charge for strategy: ${strategyName}`,
+      reference: `PTC-${tradeId}-${strategyId}`,
+      balanceAfter: newBalance
+    });
+
+    // Create notification
+    await Notification.create({
+      userId: subscriberId,
+      type: 'transaction',
+      title: 'Per-Trade Charge Deducted',
+      message: `₹${chargeAmount} has been deducted from your wallet for trade execution in strategy: ${strategyName}`,
+      data: {
+        tradeId,
+        strategyId,
+        amount: chargeAmount,
+        type: 'per_trade_charge'
+      },
+      isRead: false
+    });
+
+    console.log(`💰 Per-trade charge of ₹${chargeAmount} deducted from user ${subscriberId} for trade ${tradeId}`);
+    
+    return {
+      success: true,
+      chargeAmount,
+      newBalance
+    };
+  } catch (error) {
+    console.error(`❌ Error processing per-trade charge for user ${subscriberId}:`, error.message);
+    // Don't fail the trade if charge processing fails
+    return { success: false, error: error.message };
+  }
+};
 
 /**
  * Execute Trade from TradingView Webhook (Multi-Subscriber)
@@ -214,6 +313,52 @@ export const executeTradingViewWebhook_NEW = async (req, res) => {
         if (isPaperMode) {
           console.log(`📝 PAPER trade for ${userEmail}: ${parsedSignal} ${lots} ${symbol}`);
           
+          // ========== CLOSE OPPOSITE PAPER POSITIONS FIRST ==========
+          const existingPaperTrades = await Trade.findAll({
+            where: {
+              userId,
+              symbol: symbol.toUpperCase(),
+              status: 'Open',
+              broker: 'PAPER'
+            }
+          });
+
+          console.log(`🔍 [PAPER WEBHOOK] Found ${existingPaperTrades.length} existing open paper trade(s) for ${symbol.toUpperCase()}`);
+
+          for (const existingPaperTrade of existingPaperTrades) {
+            const existingType = existingPaperTrade.type;
+            const newType = parsedSignal === 'BUY' ? 'Buy' : 'Sell';
+
+            console.log(`🔍 [PAPER WEBHOOK] Existing: ${existingType}, New: ${newType}, Should close: ${existingType !== newType}`);
+
+            if (existingType !== newType) {
+              console.log(`🔄 [PAPER WEBHOOK] Closing opposite paper position: ${existingPaperTrade.orderId}`);
+              
+              try {
+                // Close paper position
+                const paperPositionId = existingPaperTrade.signalPayload?.paperPositionId;
+                if (paperPositionId) {
+                  await paperTradingService.closePosition(paperPositionId, existingPaperTrade.currentPrice);
+                }
+
+                // Update trade status
+                await existingPaperTrade.update({
+                  status: 'Completed',
+                  closedAt: new Date(),
+                  closedReason: 'Opposite signal - Position reversed (paper)'
+                });
+
+                emitTradeUpdate(userId, existingPaperTrade, 'update');
+                console.log(`✅ [PAPER WEBHOOK] Closed opposite paper position`);
+              } catch (closeError) {
+                console.error(`❌ [PAPER WEBHOOK] Failed to close opposite paper position:`, closeError.message);
+              }
+            } else {
+              console.log(`ℹ️ [PAPER WEBHOOK] Same direction - keeping existing paper position ${existingPaperTrade.orderId}`);
+            }
+          }
+          
+          // ========== NOW OPEN NEW PAPER POSITION ==========
           // Get live price from MT5 (use admin's default connection or cached price)
           let currentPrice = strategy.symbolValue || 100;
           
@@ -321,6 +466,8 @@ export const executeTradingViewWebhook_NEW = async (req, res) => {
             // Emit real-time update
             emitTradeUpdate(userId, paperTrade, 'create');
 
+            // NOTE: No per-trade charge for paper trades - only live trades are charged
+
             paperTrades.push({
               userId,
               userEmail,
@@ -414,6 +561,58 @@ export const executeTradingViewWebhook_NEW = async (req, res) => {
             continue;
           }
 
+          // ========== CLOSE OPPOSITE POSITIONS FIRST ==========
+          // Check for existing open positions for this symbol
+          const existingOpenTrades = await Trade.findAll({
+            where: {
+              userId,
+              symbol: symbol.toUpperCase(),
+              status: 'Open',
+              broker: 'MT5'
+            }
+          });
+
+          console.log(`🔍 [WEBHOOK] Found ${existingOpenTrades.length} existing open MT5 trade(s) for ${symbol.toUpperCase()}`);
+
+          // Close opposite direction positions
+          for (const existingTrade of existingOpenTrades) {
+            const existingType = existingTrade.type; // 'Buy' or 'Sell'
+            const newType = parsedSignal === 'BUY' ? 'Buy' : 'Sell';
+
+            console.log(`🔍 [WEBHOOK] Existing: ${existingType}, New: ${newType}, Should close: ${existingType !== newType}`);
+
+            // If opposite direction, close it
+            if (existingType !== newType) {
+              console.log(`🔄 [WEBHOOK] Closing opposite position: ${existingTrade.orderId} (${existingType} → ${newType})`);
+              
+              try {
+                // Close on broker
+                const closeResult = await mt5Broker.closeTrade(existingTrade.orderId);
+                
+                // Update database
+                await existingTrade.update({
+                  status: 'Completed',
+                  closedAt: new Date(),
+                  closedReason: 'Opposite signal - Position reversed',
+                  currentPrice: closeResult.closePrice || existingTrade.currentPrice || existingTrade.price,
+                  profit: closeResult.profit || 0,
+                  profitPercent: closeResult.profitPercent || 0
+                });
+
+                // Emit update
+                emitTradeUpdate(userId, existingTrade, 'update');
+                
+                console.log(`✅ [WEBHOOK] Closed opposite position ${existingTrade.orderId}`);
+              } catch (closeError) {
+                console.error(`❌ [WEBHOOK] Failed to close opposite position ${existingTrade.orderId}:`, closeError.message);
+                // Continue anyway to open new position
+              }
+            } else {
+              console.log(`ℹ️ [WEBHOOK] Same direction - keeping existing position ${existingTrade.orderId}`);
+            }
+          }
+
+          // ========== NOW PLACE NEW TRADE ==========
           // Prepare trade parameters
           const tradeParams = {
             symbol: symbol.toUpperCase(),
@@ -443,7 +642,7 @@ export const executeTradingViewWebhook_NEW = async (req, res) => {
             amount: tradeResult.volume,
             price: tradeResult.openPrice,
             currentPrice: tradeResult.openPrice,
-            status: tradeResult.status === 'FILLED' ? 'Completed' : 'Pending',
+            status: tradeResult.status === 'FILLED' ? 'Open' : 'Pending',
             date: new Date(),
             broker: 'MT5',
             brokerType: apiKey.broker,
@@ -476,6 +675,19 @@ export const executeTradingViewWebhook_NEW = async (req, res) => {
           // Emit real-time update
           emitTradeUpdate(userId, trade, 'create');
 
+          // Process per-trade charge for subscriber (owner is exempt)
+          const chargeResult = await processPerTradeChargeForSubscriber({
+            subscriberId: userId,
+            ownerId: strategy.userId,
+            strategyId: strategy.id,
+            strategyName: strategy.name,
+            tradeId: trade.id
+          });
+          
+          if (chargeResult.success && !chargeResult.skipped) {
+            console.log(`💰 Per-trade charge processed for live trade: ₹${chargeResult.chargeAmount}`);
+          }
+
           tradeResults.push({
             userId,
             userEmail,
@@ -485,7 +697,8 @@ export const executeTradingViewWebhook_NEW = async (req, res) => {
             volume: lots,
             openPrice: tradeResult.openPrice,
             status: 'success',
-            mode: 'live'
+            mode: 'live',
+            chargeDeducted: chargeResult.success && !chargeResult.skipped ? chargeResult.chargeAmount : 0
           });
         }
 
@@ -503,6 +716,33 @@ export const executeTradingViewWebhook_NEW = async (req, res) => {
     const successCount = tradeResults.length + paperTrades.length;
     const failCount = errors.length;
     const totalCount = subscriptions.length;
+
+    // ========== CREATE SIGNAL LOG ENTRY ==========
+    try {
+      const signalValue = isCloseSignal ? 0 : (parsedSignal === 'BUY' ? 1 : -1);
+      
+      await SignalLog.create({
+        strategyId: strategy.id,
+        segment: strategy.segment,
+        canonicalSymbol: symbol.toUpperCase(),
+        signal: signalValue,
+        signalId: `${strategy.id}-${Date.now()}`,
+        payloadHash: null,
+        payload: JSON.stringify(req.body),
+        source: 'webhook',
+        usersNotified: totalCount,
+        tradesExecuted: successCount,
+        success: successCount > 0,
+        errorMessage: errors.length > 0 ? JSON.stringify(errors) : null,
+        receivedAt: signalReceivedAt
+      });
+
+      console.log(`📝 Signal log created for strategy ${strategy.name}: ${parsedSignal} signal to ${totalCount} users`);
+    } catch (logError) {
+      console.error('❌ Failed to create signal log:', logError);
+      // Don't fail the entire request if logging fails
+    }
+    // ==========================================
 
     res.status(successCount > 0 ? 201 : 500).json({
       success: successCount > 0,

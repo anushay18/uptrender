@@ -1,5 +1,6 @@
 import express from 'express';
 import { authenticate } from '../middleware/authMiddleware.js';
+import { webhookLimiter } from '../middleware/rateLimiter.js';
 import { 
   executeStrategyTrade,
   executeManualTrade,
@@ -8,7 +9,8 @@ import {
   getOpenPositions,
   getAccountInfo,
   executeTradingViewWebhook,
-  getMultipleSymbolPrices
+  getMultipleSymbolPrices,
+  syncBrokerPositions
 } from '../controllers/algoTradeController.js';
 
 const router = express.Router();
@@ -19,7 +21,7 @@ const router = express.Router();
  * @access  Public (with secret validation)
  * @body    { secret: string, strategyId: number, userId: number, signal: "BUY"|"SELL", symbol?: string }
  */
-router.post('/webhook', executeTradingViewWebhook);
+router.post('/webhook', webhookLimiter, executeTradingViewWebhook);
 
 /**
  * @route   POST /api/algo-trades/execute
@@ -75,6 +77,14 @@ router.get('/positions', authenticate, getOpenPositions);
  * @query   segment (optional, default: Forex)
  */
 router.get('/account', authenticate, getAccountInfo);
+
+/**
+ * @route   POST /api/algo-trades/sync-positions
+ * @desc    Sync positions from broker - detect broker-closed positions
+ * @access  Private
+ * @body    { segment?: string }
+ */
+router.post('/sync-positions', authenticate, syncBrokerPositions);
 
 console.log('✅ AlgoTrade routes loaded');
 

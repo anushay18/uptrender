@@ -1,54 +1,97 @@
 {
   "expo": {
     "name": "Uptrender",
-    "slug": "Uptrender",
+    "slug": "uptrender",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "platforms": [
+      "ios",
+      "android"
+    ],
+    "icon": "./assets/images/uptrender-logo.png",
     "scheme": "uptrender",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "owner": "raman42",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.raman42.uptrender",
+      "infoPlist": {
+        "CFBundleURLTypes": [
+          {
+            "CFBundleURLSchemes": [
+              "uptrender"
+            ]
+          }
+        ]
+      }
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "foregroundImage": "./assets/images/uptrender-logo.png",
+        "backgroundColor": "#ffffff"
+      },
+      "splash": {
+        "image": "./assets/images/uptrender-logo.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.chabi12.Uptrender"
+      "package": "com.raman42.uptrender",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "uptrender"
+            }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ]
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/uptrender-logo.png"
     },
     "plugins": [
       "expo-router",
       [
+        "@react-native-google-signin/google-signin",
+        {
+          "iosUrlScheme": "com.googleusercontent.apps.710894950429-8levbhu3gmb8jucir4eq38n5sjkqn4q2.apps.googleusercontent.com"
+        }
+      ],
+      [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 200,
+          "image": "./assets/images/uptrender-logo.png",
+          "imageWidth": 300,
           "resizeMode": "contain",
           "backgroundColor": "#ffffff",
           "dark": {
             "backgroundColor": "#000000"
           }
         }
-      ]
+      ],
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": false
     },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/ff706fec-d3a9-42e5-848b-91a2f46d6d3a"
+    },
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "7c57f2eb-414b-4532-8f0d-6e821c45f118"
+        "projectId": "c5e28dc7-6c66-4c88-811b-81a59d9bba3e"
       }
     }
   }

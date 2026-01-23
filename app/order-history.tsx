@@ -1,20 +1,20 @@
 import { colors } from '@/constants/styles';
 import { useTheme } from '@/context/ThemeContext';
-import { paperPositionService } from '@/services';
+import { paperPositionService, tradeService } from '@/services';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
-  Modal,
-  Platform,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View
+    ActivityIndicator,
+    Modal,
+    Platform,
+    RefreshControl,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View
 } from 'react-native';
 
 type DateRangeType = 'Today' | 'Week' | 'Month' | 'Year' | 'Custom';
@@ -141,14 +141,17 @@ export default function OrderHistoryScreen() {
         filters.market = selectedMarkets[0];
       }
       
-      const [openRes, historyRes] = await Promise.all([
+      // Fetch from BOTH paper positions AND real trades
+      const [openRes, historyRes, tradesRes] = await Promise.all([
         paperPositionService.getOpenPositions(filters),
         paperPositionService.getPositionHistory(filters),
+        tradeService.getTrades(filters),
       ]);
       
       // Format open positions
+      let mappedOpenPositions: any[] = [];
       if (openRes.success && openRes.data) {
-        setOpenPositions(openRes.data.map((p: any) => ({
+        mappedOpenPositions = openRes.data.map((p: any) => ({
           id: String(p.id),
           strategyName: p.strategy?.name || p.strategyName || '-',
           symbol: p.symbol,
@@ -159,53 +162,125 @@ export default function OrderHistoryScreen() {
           mtm: p.profit || 0,
           date: new Date(p.openTime).toLocaleDateString(),
           broker: p.broker || 'Paper Trading',
-        })));
+          status: p.status,
+          rawDate: p.openTime,
+        }));
+        setOpenPositions(mappedOpenPositions);
       }
       
-      // Format historical orders
+      // Format historical paper orders (Completed/Closed orders)
+      const paperOrders: any[] = [];
       if (historyRes.success && historyRes.data) {
-        setOrders(historyRes.data.map((p: any) => ({
-          id: String(p.id),
-          market: p.market || 'Forex',
-          symbol: p.symbol,
-          type: p.type,
-          amount: Number(p.volume ?? 1),
-          entry: Number(p.openPrice ?? 0),
-          current: Number(p.closePrice ?? p.currentPrice ?? 0),
-          pnl: Number(p.realizedProfit ?? p.profit ?? 0),
-          pnlPercent: Number(p.profitPercent ?? 0),
-          status: p.status === 'Closed' ? 'Completed' : p.status,
-          broker: p.broker || 'Paper Trading',
-          date: new Date(p.closeTime || p.openTime).toLocaleDateString(),
-          time: new Date(p.closeTime || p.openTime).toLocaleTimeString(),
-          rawDate: p.closeTime || p.openTime,
-          strategyName: p.strategy?.name || p.strategyName || '-',
-        })));
+        console.log('📊 [OrderHistory] Raw paper history data:', historyRes.data);
+        historyRes.data.forEach((p: any) => {
+          const orderDate = p.closeTime || p.openTime || p.createdAt || new Date().toISOString();
+          paperOrders.push({
+            id: `paper-${p.id}`,
+            originalId: String(p.id),
+            source: 'paper',
+            market: p.market || 'Forex',
+            symbol: p.symbol,
+            type: p.type,
+            amount: Number(p.volume ?? 1),
+            entry: Number(p.openPrice ?? 0),
+            current: Number(p.closePrice ?? p.currentPrice ?? 0),
+            pnl: Number(p.realizedProfit ?? p.profit ?? 0),
+            pnlPercent: Number(p.profitPercent ?? 0),
+            status: p.status === 'Closed' ? 'Completed' : p.status,
+            broker: p.broker || 'Paper Trading',
+            date: new Date(orderDate).toLocaleDateString(),
+            time: new Date(orderDate).toLocaleTimeString(),
+            rawDate: orderDate,
+            strategyName: p.strategy?.name || p.strategyName || '-',
+          });
+        });
       }
       
-      // Calculate stats from filtered data for accurate date-based results
+      // Format real trades - ONLY include Failed/non-paper orders to avoid duplicates
+      // Paper completed orders are already in paperOrders from /paper-positions/history
+      const realTrades: any[] = [];
+      if (tradesRes.success && tradesRes.data) {
+        console.log('📊 [OrderHistory] Raw trades data:', tradesRes.data);
+        tradesRes.data.forEach((t: any) => {
+          // Skip if this is a paper trade that's already covered by paper-positions
+          // Only include Failed trades or real broker trades (not paper)
+          const isPaperTrade = t.broker === 'Paper Trading' || t.broker === 'paper' || !t.broker;
+          const isFailed = t.status === 'Failed';
+          
+          // Include if: it's a Failed trade OR it's a real broker trade (not paper)
+          if (isFailed || (!isPaperTrade && t.status !== 'Closed' && t.status !== 'Completed')) {
+            const orderDate = t.createdAt || t.date || new Date().toISOString();
+            realTrades.push({
+              id: `trade-${t.id}`,
+              originalId: String(t.id),
+              source: 'trade',
+              market: t.market || 'Forex',
+              symbol: t.symbol,
+              type: t.type,
+              amount: Number(t.amount ?? t.volume ?? 1),
+              entry: Number(t.price ?? t.openPrice ?? 0),
+              current: Number(t.currentPrice ?? t.closePrice ?? t.price ?? 0),
+              pnl: Number(t.pnl ?? t.profit ?? 0),
+              pnlPercent: Number(t.pnlPercentage ?? t.profitPercent ?? 0),
+              status: t.status,
+              broker: t.broker || 'Unknown',
+              date: new Date(orderDate).toLocaleDateString(),
+              time: new Date(orderDate).toLocaleTimeString(),
+              rawDate: orderDate,
+              strategyName: t.strategyName || t.strategy?.name || '-',
+            });
+          }
+        });
+      }
+      
+      // Combine both sources - no duplicates since we filtered realTrades
+      const allOrders = [...paperOrders, ...realTrades];
+      console.log('📊 [OrderHistory] Combined orders:', allOrders.length, 'Paper:', paperOrders.length, 'Trades:', realTrades.length);
+      setOrders(allOrders);
+      
+      // Calculate stats from all data
       const openData = openRes.success && openRes.data ? openRes.data : [];
       const historyData = historyRes.success && historyRes.data ? historyRes.data : [];
-      
-      const completedCount = historyData.filter((p: any) => 
-        p.status === 'Closed' || p.status === 'TP_Hit'
+      const tradesData = tradesRes.success && tradesRes.data ? tradesRes.data : [];
+
+      // Count completed from paper positions
+      const paperCompletedCount = historyData.filter((p: any) =>
+        p.status === 'Closed' || p.status === 'TP_Hit' || p.status === 'Completed'
       ).length;
-      
-      const failedCount = historyData.filter((p: any) => 
-        p.status === 'Failed' || p.status === 'SL_Hit'
+
+      // Count failed from real trades only (not paper)
+      const tradeFailedCount = tradesData.filter((t: any) =>
+        t.status === 'Failed'
       ).length;
-      
-      const totalPnl = historyData.reduce((sum: number, p: any) => {
+
+      // Pending should count open positions that match current market/broker filters
+      const pendingCount = mappedOpenPositions.filter((p: any) => {
+        const matchesMarket = selectedMarkets.length === 0 || selectedMarkets.includes(p.market);
+        const matchesBroker = selectedBrokers.length === 0 || selectedBrokers.includes(p.broker);
+        const isOpen = p.status === 'Open';
+        return matchesMarket && matchesBroker && isOpen;
+      }).length;
+
+      // Calculate total P&L from both sources
+      const paperPnl = historyData.reduce((sum: number, p: any) => {
         const val = Number(p.realizedProfit ?? p.profit ?? 0);
         return sum + (Number.isFinite(val) ? val : 0);
       }, 0);
-      
+
+      const tradePnl = tradesData.reduce((sum: number, t: any) => {
+        const val = Number(t.pnl ?? t.profit ?? 0);
+        return sum + (Number.isFinite(val) ? val : 0);
+      }, 0);
+
+      // Total orders = completed paper orders + failed real trades + pending open positions
+      const totalOrderCount = paperCompletedCount + tradeFailedCount + pendingCount;
+
       setTradeStats({
-        totalTrades: openData.length + historyData.length,
-        completedTrades: completedCount,
-        pendingTrades: openData.length,
-        failedTrades: failedCount,
-        totalPnl: totalPnl,
+        totalTrades: totalOrderCount,
+        completedTrades: paperCompletedCount,
+        pendingTrades: pendingCount,
+        failedTrades: tradeFailedCount,
+        totalPnl: paperPnl + tradePnl,
       });
     } catch (error) {
       console.error('Error fetching orders:', error);
@@ -213,7 +288,7 @@ export default function OrderHistoryScreen() {
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, [getDateRange, selectedMarkets]);
+  }, [getDateRange, selectedMarkets, selectedBrokers]);
 
   useEffect(() => {
     fetchOrders();
@@ -297,6 +372,20 @@ export default function OrderHistoryScreen() {
     return pnl >= 0 ? theme.success : theme.danger;
   };
 
+  const getStatusColor = (status: string) => {
+    const normalizedStatus = status?.toLowerCase() || '';
+    if (normalizedStatus === 'completed' || normalizedStatus === 'closed' || normalizedStatus === 'tp_hit') {
+      return theme.success;
+    }
+    if (normalizedStatus === 'failed' || normalizedStatus === 'sl_hit') {
+      return theme.danger;
+    }
+    if (normalizedStatus === 'pending' || normalizedStatus === 'open') {
+      return theme.warning;
+    }
+    return theme.titleColor;
+  };
+
   const formatNumber = (value: any, digits = 2, currency = '') => {
     const n = Number(value);
     return Number.isFinite(n) ? `${currency}${n.toFixed(digits)}` : '-';
@@ -333,12 +422,19 @@ export default function OrderHistoryScreen() {
     // Broker filter
     const matchesBroker = selectedBrokers.length === 0 || selectedBrokers.includes(order.broker);
 
-    // Date filter using rawDate
-    const itemTime = new Date(order.rawDate || order.date).getTime();
-    const matchesDate = Number.isFinite(itemTime) ? (itemTime >= _startTime && itemTime < _endTime) : true;
+    // Date filter using rawDate - be lenient: if date is invalid, include the order
+    let matchesDate = true;
+    if (order.rawDate) {
+      const itemTime = new Date(order.rawDate).getTime();
+      if (Number.isFinite(itemTime)) {
+        matchesDate = itemTime >= _startTime && itemTime < _endTime;
+      }
+    }
     
     return matchesSearch && matchesMarket && matchesBroker && matchesDate;
   });
+
+  console.log('📊 [OrderHistory] Total orders:', orders.length, 'Filtered orders:', filteredOrders.length);
 
   // Filter open positions
   const filteredPositions = openPositions.filter((position) => {
@@ -678,8 +774,8 @@ export default function OrderHistoryScreen() {
                           ({Number.isFinite(Number(order.pnlPercent)) ? `${Number(order.pnlPercent).toFixed(2)}%` : '-'})
                         </Text>
                       </View>
-                      <View style={[styles.statusBadge, { backgroundColor: `${theme.success}20` }]}>
-                        <Text style={[styles.statusText, { color: theme.success }]}>{order.status}</Text>
+                      <View style={[styles.statusBadge, { backgroundColor: `${getStatusColor(order.status)}20` }]}>
+                        <Text style={[styles.statusText, { color: getStatusColor(order.status) }]}>{order.status}</Text>
                       </View>
                       <View style={styles.dateContainer}>
                         <Ionicons name="calendar-outline" size={12} color={theme.textSecondary} />
